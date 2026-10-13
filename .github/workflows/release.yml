@@ -1,0 +1,58 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Build Windows executable
+        shell: pwsh
+        run: .\build.ps1
+
+      - name: Package portable release
+        shell: pwsh
+        run: |
+          $packageDir = "dist/AdbDeviceVitals"
+          New-Item -ItemType Directory -Force -Path $packageDir | Out-Null
+          Copy-Item "src/AdbDeviceVitals/bin/Release/AdbDeviceVitals.exe" $packageDir
+          Copy-Item "README.md" $packageDir
+          Copy-Item "LICENSE" $packageDir
+          Compress-Archive -Path "$packageDir/*" -DestinationPath "dist/AdbDeviceVitals-win-x64.zip" -Force
+
+          $hash = (Get-FileHash "dist/AdbDeviceVitals-win-x64.zip" -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  AdbDeviceVitals-win-x64.zip" | Set-Content "dist/SHA256SUMS.txt" -Encoding ascii
+
+          @"
+          Windows 便携版，无需安装。
+
+          使用前请确认：
+          - 手机已开启 USB 调试并授权当前电脑。
+          - adb.exe 已加入 PATH，或放在程序同目录。
+          - 支持 Windows 10 和 Windows 11。
+
+          下载 `AdbDeviceVitals-win-x64.zip`，解压后运行 `AdbDeviceVitals.exe`。
+          "@ | Set-Content "dist/release-notes.md" -Encoding utf8
+
+      - name: Publish GitHub Release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ github.ref_name }}" `
+            "dist/AdbDeviceVitals-win-x64.zip" `
+            "dist/SHA256SUMS.txt" `
+            --verify-tag `
+            --latest `
+            --title "ADB Device Vitals ${{ github.ref_name }}" `
+            --notes-file "dist/release-notes.md"

@@ -2,6 +2,8 @@
 
 一个轻量的 Windows 托盘工具，通过 ADB 在本机查看 Android 设备的关键状态。
 
+[下载最新版 Windows 便携包](https://github.com/AsherWang/adb-device-vitals/releases/latest/download/AdbDeviceVitals-win-x64.zip)
+
 ## 当前功能
 
 - 自动发现 `adb.exe` 和已授权的 Android 设备
