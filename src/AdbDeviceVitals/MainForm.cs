@@ -23,19 +23,28 @@ namespace AdbDeviceVitals
         private readonly DeviceMonitor _monitor;
         private readonly CsvLogger _logger;
         private readonly Timer _timer;
+        private readonly Timer _activationTimer;
+        private readonly System.Threading.EventWaitHandle _activationEvent;
         private readonly NotifyIcon _tray;
         private readonly HistoryChart _chart;
         private Label _connection;
         private Label _updated;
+        private Label _adbPath;
         private bool _polling;
         private bool _allowExit;
         private bool _offlineNotified;
         private DateTime _lastLog = DateTime.MinValue;
         private DateTime _lastThermalAlert = DateTime.MinValue;
 
-        public MainForm()
+        public MainForm() : this(null)
         {
+        }
+
+        internal MainForm(System.Threading.EventWaitHandle activationEvent)
+        {
+            _activationEvent = activationEvent;
             Text = "ADB Device Vitals";
+            try { Icon = System.Drawing.Icon.ExtractAssociatedIcon(Application.ExecutablePath); } catch { }
             StartPosition = FormStartPosition.CenterScreen;
             Size = new Size(880, 650);
             MinimumSize = new Size(760, 560);
@@ -50,7 +59,7 @@ namespace AdbDeviceVitals
             BuildLayout();
 
             _tray = new NotifyIcon();
-            _tray.Icon = SystemIcons.Application;
+            _tray.Icon = Icon ?? SystemIcons.Application;
             _tray.Text = "ADB Device Vitals";
             _tray.Visible = true;
             _tray.DoubleClick += delegate { RestoreWindow(); };
@@ -65,7 +74,20 @@ namespace AdbDeviceVitals
             _timer = new Timer();
             _timer.Interval = 2500;
             _timer.Tick += async delegate { await RefreshSnapshot(false); };
-            Shown += async delegate { _timer.Start(); await RefreshSnapshot(true); };
+
+            _activationTimer = new Timer();
+            _activationTimer.Interval = 250;
+            _activationTimer.Tick += delegate
+            {
+                if (_activationEvent != null && _activationEvent.WaitOne(0)) RestoreWindow();
+            };
+
+            Shown += async delegate
+            {
+                _timer.Start();
+                if (_activationEvent != null) _activationTimer.Start();
+                await RefreshSnapshot(true);
+            };
             Resize += delegate { if (WindowState == FormWindowState.Minimized) Hide(); };
             FormClosing += OnFormClosing;
         }
@@ -90,8 +112,16 @@ namespace AdbDeviceVitals
             Button refresh = new Button { Text = "刷新", Width = 72, Height = 30, FlatStyle = FlatStyle.Flat, ForeColor = Color.White, BackColor = Color.FromArgb(38, 48, 61), Anchor = AnchorStyles.Top | AnchorStyles.Right };
             refresh.FlatAppearance.BorderSize = 0;
             refresh.Click += async delegate { await RefreshSnapshot(true); };
-            header.Controls.Add(title); header.Controls.Add(subtitle); header.Controls.Add(_connection); header.Controls.Add(refresh);
-            header.Resize += delegate { refresh.Location = new Point(header.Width - refresh.Width, 8); _connection.Location = new Point(refresh.Left - _connection.Width - 14, 15); };
+            Button settings = new Button { Text = "设置", Width = 72, Height = 30, FlatStyle = FlatStyle.Flat, ForeColor = Color.White, BackColor = Color.FromArgb(38, 48, 61), Anchor = AnchorStyles.Top | AnchorStyles.Right };
+            settings.FlatAppearance.BorderSize = 0;
+            settings.Click += async delegate { await OpenSettings(); };
+            header.Controls.Add(title); header.Controls.Add(subtitle); header.Controls.Add(_connection); header.Controls.Add(settings); header.Controls.Add(refresh);
+            header.Resize += delegate
+            {
+                refresh.Location = new Point(header.Width - refresh.Width, 8);
+                settings.Location = new Point(refresh.Left - settings.Width - 8, 8);
+                _connection.Location = new Point(settings.Left - _connection.Width - 14, 15);
+            };
             root.Controls.Add(header, 0, 0);
 
             TableLayoutPanel cards = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 3, RowCount = 2, Margin = new Padding(0) };
@@ -111,10 +141,27 @@ namespace AdbDeviceVitals
 
             Panel footer = new Panel { Dock = DockStyle.Fill };
             _updated = new Label { Text = "尚未采集", AutoSize = true, ForeColor = _muted, Location = new Point(0, 7) };
-            Label adbPath = new Label { Text = _adb.IsAvailable ? "ADB: " + _adb.AdbPath : "ADB 未找到", AutoEllipsis = true, ForeColor = _muted, AutoSize = false, TextAlign = ContentAlignment.MiddleRight, Anchor = AnchorStyles.Top | AnchorStyles.Right };
-            footer.Controls.Add(_updated); footer.Controls.Add(adbPath);
-            footer.Resize += delegate { adbPath.SetBounds(Math.Max(240, footer.Width / 2), 3, Math.Max(100, footer.Width / 2), 22); };
+            _adbPath = new Label { Text = AdbPathText(), AutoEllipsis = true, ForeColor = _muted, AutoSize = false, TextAlign = ContentAlignment.MiddleRight, Anchor = AnchorStyles.Top | AnchorStyles.Right };
+            footer.Controls.Add(_updated); footer.Controls.Add(_adbPath);
+            footer.Resize += delegate { _adbPath.SetBounds(Math.Max(240, footer.Width / 2), 3, Math.Max(100, footer.Width / 2), 22); };
             root.Controls.Add(footer, 0, 3);
+        }
+
+        private async Task OpenSettings()
+        {
+            using (SettingsForm dialog = new SettingsForm(_adb.AdbPath))
+            {
+                if (dialog.ShowDialog(this) != DialogResult.OK) return;
+            }
+
+            _adb.ReloadPath();
+            _adbPath.Text = AdbPathText();
+            await RefreshSnapshot(true);
+        }
+
+        private string AdbPathText()
+        {
+            return _adb.IsAvailable ? "ADB: " + _adb.AdbPath : "ADB 未找到";
         }
 
         private void AddCard(TableLayoutPanel grid, int column, int row, string key, string title)
@@ -247,6 +294,7 @@ namespace AdbDeviceVitals
             if (disposing)
             {
                 if (_timer != null) _timer.Dispose();
+                if (_activationTimer != null) _activationTimer.Dispose();
                 if (_chart != null) _chart.Dispose();
             }
             base.Dispose(disposing);

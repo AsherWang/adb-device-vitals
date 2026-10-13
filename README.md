@@ -14,6 +14,7 @@
 - 蜂窝接口实时下载/上传速度
 - 最近状态曲线、CSV 本地日志和 Windows 异常提醒
 - 最小化到系统托盘
+- 单实例运行；重复启动时自动恢复已有窗口
 
 所有数据均通过本机 ADB 读取。程序不会上传数据，也不会保存 ADB 原始输出、IMEI、MEID 或基站标识。
 
@@ -24,7 +25,8 @@
 - ADB 已加入 PATH，或位于以下常见位置之一：
   - 程序目录
   - `%LOCALAPPDATA%\Android\Sdk\platform-tools`
-  - `D:\env\adb\platform-tools`
+
+也可以在程序右上角打开“设置”，手动选择包含 `adb.exe` 的 `platform-tools` 目录。该设置保存在当前用户的注册表 `HKCU\Software\AdbDeviceVitals`，无需管理员权限。
 
 程序不需要 Root，也不需要在手机安装客户端。
 

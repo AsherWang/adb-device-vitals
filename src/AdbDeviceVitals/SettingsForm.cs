@@ -1,0 +1,108 @@
+using System;
+using System.Drawing;
+using System.IO;
+using System.Windows.Forms;
+using AdbDeviceVitals.Services;
+
+namespace AdbDeviceVitals
+{
+    public sealed class SettingsForm : Form
+    {
+        private readonly TextBox _adbDirectory;
+
+        public SettingsForm(string detectedAdbPath)
+        {
+            Text = "设置";
+            try { Icon = System.Drawing.Icon.ExtractAssociatedIcon(Application.ExecutablePath); } catch { }
+            StartPosition = FormStartPosition.CenterParent;
+            FormBorderStyle = FormBorderStyle.FixedDialog;
+            MaximizeBox = false;
+            MinimizeBox = false;
+            ShowInTaskbar = false;
+            ClientSize = new Size(560, 205);
+            Font = new Font("Segoe UI", 9f);
+
+            Label heading = new Label
+            {
+                Text = "ADB 目录",
+                AutoSize = true,
+                Font = new Font("Segoe UI Semibold", 11f),
+                Location = new Point(18, 16)
+            };
+            Label help = new Label
+            {
+                Text = "请选择包含 adb.exe 的 platform-tools 目录。留空时将从程序目录、Android SDK 和 PATH 自动查找。",
+                AutoSize = false,
+                Location = new Point(20, 47),
+                Size = new Size(520, 40)
+            };
+            _adbDirectory = new TextBox
+            {
+                Location = new Point(20, 92),
+                Size = new Size(425, 25),
+                Text = AppSettings.AdbDirectory
+            };
+            Button browse = new Button { Text = "浏览…", Location = new Point(453, 90), Size = new Size(87, 29) };
+            browse.Click += BrowseDirectory;
+
+            string detected = string.IsNullOrEmpty(detectedAdbPath) ? "当前未检测到 ADB" : "当前使用：" + detectedAdbPath;
+            Label current = new Label
+            {
+                Text = detected,
+                AutoEllipsis = true,
+                ForeColor = Color.DimGray,
+                Location = new Point(20, 126),
+                Size = new Size(520, 22)
+            };
+
+            Button clear = new Button { Text = "恢复自动查找", Location = new Point(20, 160), Size = new Size(112, 30) };
+            clear.Click += delegate { _adbDirectory.Text = string.Empty; };
+            Button cancel = new Button { Text = "取消", DialogResult = DialogResult.Cancel, Location = new Point(358, 160), Size = new Size(86, 30) };
+            Button save = new Button { Text = "保存", Location = new Point(454, 160), Size = new Size(86, 30) };
+            save.Click += SaveSettings;
+
+            Controls.Add(heading);
+            Controls.Add(help);
+            Controls.Add(_adbDirectory);
+            Controls.Add(browse);
+            Controls.Add(current);
+            Controls.Add(clear);
+            Controls.Add(cancel);
+            Controls.Add(save);
+            AcceptButton = save;
+            CancelButton = cancel;
+        }
+
+        private void BrowseDirectory(object sender, EventArgs e)
+        {
+            using (FolderBrowserDialog dialog = new FolderBrowserDialog())
+            {
+                dialog.Description = "选择 Android platform-tools 目录";
+                dialog.ShowNewFolderButton = false;
+                if (Directory.Exists(_adbDirectory.Text)) dialog.SelectedPath = _adbDirectory.Text;
+                if (dialog.ShowDialog(this) == DialogResult.OK) _adbDirectory.Text = dialog.SelectedPath;
+            }
+        }
+
+        private void SaveSettings(object sender, EventArgs e)
+        {
+            string directory = _adbDirectory.Text.Trim().Trim('"');
+            if (directory.Length > 0 && !File.Exists(Path.Combine(directory, "adb.exe")))
+            {
+                MessageBox.Show(this, "所选目录中没有找到 adb.exe。", "ADB 目录无效", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
+            try
+            {
+                AppSettings.AdbDirectory = directory;
+                DialogResult = DialogResult.OK;
+                Close();
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(this, "无法保存设置：" + ex.Message, "保存失败", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        }
+    }
+}

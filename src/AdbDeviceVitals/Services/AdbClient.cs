@@ -17,6 +17,11 @@ namespace AdbDeviceVitals.Services
             AdbPath = FindAdb();
         }
 
+        public void ReloadPath()
+        {
+            AdbPath = FindAdb();
+        }
+
         public bool IsAvailable
         {
             get { return !string.IsNullOrEmpty(AdbPath) && File.Exists(AdbPath); }
@@ -81,10 +86,12 @@ namespace AdbDeviceVitals.Services
         private static string FindAdb()
         {
             List<string> candidates = new List<string>();
+            string configuredDirectory = AppSettings.AdbDirectory;
+            if (!string.IsNullOrWhiteSpace(configuredDirectory))
+                candidates.Add(Path.Combine(configuredDirectory, "adb.exe"));
             candidates.Add(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "adb.exe"));
             string local = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
             if (!string.IsNullOrEmpty(local)) candidates.Add(Path.Combine(local, "Android", "Sdk", "platform-tools", "adb.exe"));
-            candidates.Add(@"D:\env\adb\platform-tools\adb.exe");
 
             string path = Environment.GetEnvironmentVariable("PATH") ?? string.Empty;
             foreach (string directory in path.Split(Path.PathSeparator))

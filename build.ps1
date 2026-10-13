@@ -4,6 +4,7 @@ $root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $project = Join-Path $root 'src\AdbDeviceVitals'
 $output = Join-Path $project 'bin\Release'
 $exe = Join-Path $output 'AdbDeviceVitals.exe'
+$icon = Join-Path $project 'Resources\AdbDeviceVitals.ico'
 $compiler = Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319\csc.exe'
 
 if (-not (Test-Path -LiteralPath $compiler)) {
@@ -19,7 +20,8 @@ $sources = Get-ChildItem -LiteralPath $project -Filter '*.cs' -Recurse |
     Where-Object { $_.FullName -notmatch '\\(bin|obj)\\' } |
     ForEach-Object { $_.FullName }
 
-& $compiler /nologo /target:winexe /platform:anycpu /optimize+ /codepage:65001 `
+$iconArgument = '/win32icon:' + $icon
+& $compiler /nologo /target:winexe /platform:anycpu /optimize+ /codepage:65001 $iconArgument `
     /out:$exe `
     /reference:System.dll `
     /reference:System.Core.dll `
