@@ -15,6 +15,8 @@ jobs:
     steps:
       - name: Check out source
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Build Windows executable
         shell: pwsh
@@ -33,16 +35,22 @@ jobs:
           $hash = (Get-FileHash "dist/AdbDeviceVitals-win-x64.zip" -Algorithm SHA256).Hash.ToLowerInvariant()
           "$hash  AdbDeviceVitals-win-x64.zip" | Set-Content "dist/SHA256SUMS.txt" -Encoding ascii
 
-          @"
-          Windows 便携版，无需安装。
-
-          使用前请确认：
-          - 手机已开启 USB 调试并授权当前电脑。
-          - adb.exe 已加入 PATH，或放在程序同目录。
-          - 支持 Windows 10 和 Windows 11。
-
-          下载 `AdbDeviceVitals-win-x64.zip`，解压后运行 `AdbDeviceVitals.exe`。
-          "@ | Set-Content "dist/release-notes.md" -Encoding utf8
+          $tag = "${{ github.ref_name }}"
+          $previous = ""
+          $described = git describe --tags --abbrev=0 "HEAD^" 2>$null
+          if ($LASTEXITCODE -eq 0) { $previous = "$described".Trim() }
+          $changes = @()
+          if ($previous) { $changes = @(git log "$previous..HEAD" --pretty=format:"- %s" --no-merges) }
+          if ($changes.Count -eq 0) { $changes = @("- 维护更新") }
+          $notes = @(
+            "ADB Device Vitals $tag",
+            "",
+            ($changes -join "`n"),
+            "",
+            "下载 AdbDeviceVitals-win-x64.zip，解压后运行 AdbDeviceVitals.exe。",
+            "已安装用户可在程序设置中检查更新。更新会替换当前程序，并保留原来的路径。"
+          )
+          $notes -join "`n" | Set-Content "dist/release-notes.md" -Encoding utf8
 
       - name: Publish GitHub Release
         shell: pwsh

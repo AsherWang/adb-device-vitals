@@ -1,6 +1,7 @@
 using System;
 using System.Drawing;
 using System.IO;
+using System.Threading.Tasks;
 using System.Windows.Forms;
 using AdbDeviceVitals.Services;
 
@@ -11,9 +12,11 @@ namespace AdbDeviceVitals
         private readonly TextBox _adbDirectory;
         private readonly CheckBox _runAtStartup;
         private readonly CheckBox _autoEnableUsbTethering;
+        private readonly Func<IWin32Window, Task> _checkForUpdates;
 
-        public SettingsForm(string detectedAdbPath)
+        public SettingsForm(string detectedAdbPath, Func<IWin32Window, Task> checkForUpdates)
         {
+            _checkForUpdates = checkForUpdates;
             Text = "设置";
             try { Icon = System.Drawing.Icon.ExtractAssociatedIcon(Application.ExecutablePath); } catch { }
             StartPosition = FormStartPosition.CenterParent;
@@ -21,7 +24,7 @@ namespace AdbDeviceVitals
             MaximizeBox = false;
             MinimizeBox = false;
             ShowInTaskbar = false;
-            ClientSize = new Size(560, 286);
+            ClientSize = new Size(560, 330);
             Font = new Font("Segoe UI", 9f);
 
             Label heading = new Label
@@ -72,10 +75,20 @@ namespace AdbDeviceVitals
                 Checked = AppSettings.AutoEnableUsbTethering
             };
 
-            Button clear = new Button { Text = "恢复自动查找", Location = new Point(20, 236), Size = new Size(112, 30) };
+            Label version = new Label
+            {
+                Text = "当前版本 " + UpdateChecker.CurrentVersionText,
+                AutoSize = true,
+                ForeColor = Color.DimGray,
+                Location = new Point(20, 220)
+            };
+            Button checkUpdates = new Button { Text = "检查更新", Location = new Point(148, 214), Size = new Size(96, 30) };
+            checkUpdates.Click += async delegate { await CheckForUpdates(checkUpdates); };
+
+            Button clear = new Button { Text = "恢复自动查找", Location = new Point(20, 280), Size = new Size(112, 30) };
             clear.Click += delegate { _adbDirectory.Text = string.Empty; };
-            Button cancel = new Button { Text = "取消", DialogResult = DialogResult.Cancel, Location = new Point(358, 236), Size = new Size(86, 30) };
-            Button save = new Button { Text = "保存", Location = new Point(454, 236), Size = new Size(86, 30) };
+            Button cancel = new Button { Text = "取消", DialogResult = DialogResult.Cancel, Location = new Point(358, 280), Size = new Size(86, 30) };
+            Button save = new Button { Text = "保存", Location = new Point(454, 280), Size = new Size(86, 30) };
             save.Click += SaveSettings;
 
             Controls.Add(heading);
@@ -85,11 +98,31 @@ namespace AdbDeviceVitals
             Controls.Add(current);
             Controls.Add(_runAtStartup);
             Controls.Add(_autoEnableUsbTethering);
+            Controls.Add(version);
+            Controls.Add(checkUpdates);
             Controls.Add(clear);
             Controls.Add(cancel);
             Controls.Add(save);
             AcceptButton = save;
             CancelButton = cancel;
+        }
+
+        private async Task CheckForUpdates(Button button)
+        {
+            if (_checkForUpdates == null) return;
+            button.Enabled = false;
+            try
+            {
+                await _checkForUpdates(this);
+            }
+            catch (Exception ex)
+            {
+                if (!IsDisposed) MessageBox.Show(this, ex.Message, "检查更新", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+            finally
+            {
+                if (!IsDisposed) button.Enabled = true;
+            }
         }
 
         private void BrowseDirectory(object sender, EventArgs e)

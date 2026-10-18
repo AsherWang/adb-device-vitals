@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using AdbDeviceVitals.Models;
 using AdbDeviceVitals.Parsing;
+using AdbDeviceVitals.Services;
 
 internal static class ParserTests
 {
@@ -14,6 +15,7 @@ internal static class ParserTests
         Hotspot();
         UsbTethering();
         NetworkStats();
+        Updates();
         Console.WriteLine(_failed == 0 ? "All parser tests passed." : _failed + " parser test(s) failed.");
         return _failed == 0 ? 0 : 1;
     }
@@ -84,6 +86,22 @@ internal static class ParserTests
         IDictionary<string, InterfaceCounters> values = AdbParsers.ParseNetworkStats("rmnet_data2: 295115263 149565 0 0 0 0 0 0 47949594 149720 0 0 0 0 0 0");
         Equal(295115263L, values["rmnet_data2"].ReceiveBytes, "rx bytes");
         Equal(47949594L, values["rmnet_data2"].TransmitBytes, "tx bytes");
+    }
+
+    private static void Updates()
+    {
+        Version current = new Version(0, 0, 3, 0);
+        Equal(true, UpdateChecker.IsNewerVersion("v0.0.4", current), "newer tag");
+        Equal(false, UpdateChecker.IsNewerVersion("v0.0.3", current), "same tag");
+        Equal(false, UpdateChecker.IsNewerVersion("v0.0.2", current), "older tag");
+        Equal(false, UpdateChecker.IsNewerVersion("nope", current), "invalid tag");
+        Equal(true, UpdateChecker.HashMatches("abc  AdbDeviceVitals-win-x64.zip\n", UpdateChecker.PackageFileName, "abc"), "hash match");
+        Equal(false, UpdateChecker.HashMatches("def  AdbDeviceVitals-win-x64.zip\n", UpdateChecker.PackageFileName, "abc"), "hash mismatch");
+        Equal(true, UpdateChecker.IsDevelopmentBuild(@"D:\src\AdbDeviceVitals\bin\Release\AdbDeviceVitals.exe"), "dev release path");
+        Equal(false, UpdateChecker.IsDevelopmentBuild(@"C:\Users\ash\Desktop\AdbDeviceVitals.exe"), "desktop path");
+        Equal(true, UpdateChecker.ShouldCheckAutomatically(@"C:\Users\ash\Desktop\AdbDeviceVitals.exe"), "installed exe");
+        Equal(false, UpdateChecker.ShouldCheckAutomatically(@"D:\src\AdbDeviceVitals\bin\Release\AdbDeviceVitals.exe"), "dev exe");
+        Equal(false, UpdateChecker.ShouldCheckAutomatically(@"D:\artifacts\tests\RenderSmokeTest.exe"), "test exe");
     }
 
     private static void Equal(object expected, object actual, string name)

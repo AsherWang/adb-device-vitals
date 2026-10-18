@@ -29,6 +29,8 @@
     <Reference Include="System" />
     <Reference Include="System.Core" />
     <Reference Include="System.Drawing" />
+    <Reference Include="System.IO.Compression" />
+    <Reference Include="System.IO.Compression.FileSystem" />
     <Reference Include="System.Windows.Forms" />
   </ItemGroup>
   <ItemGroup>
@@ -39,6 +41,7 @@
     <Compile Include="Services\AppSettings.cs" />
     <Compile Include="Services\CsvLogger.cs" />
     <Compile Include="Services\DeviceMonitor.cs" />
+    <Compile Include="Services\UpdateChecker.cs" />
     <Compile Include="Services\UsbTetheringService.cs" />
     <Compile Include="MainForm.cs" />
     <Compile Include="Program.cs" />

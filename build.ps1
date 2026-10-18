@@ -26,6 +26,8 @@ $iconArgument = '/win32icon:' + $icon
     /reference:System.dll `
     /reference:System.Core.dll `
     /reference:System.Drawing.dll `
+    /reference:System.IO.Compression.dll `
+    /reference:System.IO.Compression.FileSystem.dll `
     /reference:System.Windows.Forms.dll `
     $sources
 

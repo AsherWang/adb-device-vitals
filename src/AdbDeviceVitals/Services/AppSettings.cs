@@ -1,5 +1,6 @@
 using System;
 using System.Diagnostics;
+using System.Globalization;
 using Microsoft.Win32;
 
 namespace AdbDeviceVitals.Services
@@ -12,6 +13,7 @@ namespace AdbDeviceVitals.Services
         private const string AdbDirectoryValue = "AdbDirectory";
         private const string RunAtStartupValue = "RunAtStartup";
         private const string AutoEnableUsbTetheringValue = "AutoEnableUsbTethering";
+        private const string LastUpdateCheckValue = "LastUpdateCheckUtc";
         private const string RunKeyPath = @"Software\Microsoft\Windows\CurrentVersion\Run";
         private const string RunValueName = "AdbDeviceVitals";
 
@@ -57,6 +59,44 @@ namespace AdbDeviceVitals.Services
         {
             get { return ReadBoolean(AutoEnableUsbTetheringValue); }
             set { WriteBoolean(AutoEnableUsbTetheringValue, value); }
+        }
+
+        public static DateTime? LastUpdateCheckUtc
+        {
+            get
+            {
+                try
+                {
+                    using (RegistryKey key = Registry.CurrentUser.OpenSubKey(RegistryPath, false))
+                    {
+                        if (key == null) return null;
+                        string text = Convert.ToString(key.GetValue(LastUpdateCheckValue, string.Empty));
+                        DateTime value;
+                        if (!DateTime.TryParse(text, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out value)) return null;
+                        return value.ToUniversalTime();
+                    }
+                }
+                catch
+                {
+                    return null;
+                }
+            }
+            set
+            {
+                try
+                {
+                    using (RegistryKey key = Registry.CurrentUser.CreateSubKey(RegistryPath))
+                    {
+                        if (!value.HasValue)
+                            key.DeleteValue(LastUpdateCheckValue, false);
+                        else
+                            key.SetValue(LastUpdateCheckValue, value.Value.ToUniversalTime().ToString("o", CultureInfo.InvariantCulture), RegistryValueKind.String);
+                    }
+                }
+                catch
+                {
+                }
+            }
         }
 
         public static void ApplyStartupRegistration(bool enabled)

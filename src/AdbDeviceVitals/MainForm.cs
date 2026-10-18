@@ -38,6 +38,8 @@ namespace AdbDeviceVitals
         private bool _backgroundStarted;
         private bool _usbTetherRunning;
         private bool _applyingStartupVisibility;
+        private bool _updateCheckRunning;
+        private bool _exitingForUpdate;
         private DateTime _lastLog = DateTime.MinValue;
         private DateTime _lastThermalAlert = DateTime.MinValue;
 
@@ -122,6 +124,7 @@ namespace AdbDeviceVitals
             if (_activationEvent != null) _activationTimer.Start();
             await RefreshSnapshot(true);
             StartUsbTethering();
+            await CheckForUpdates(this, false);
         }
 
         private void BuildLayout()
@@ -187,11 +190,12 @@ namespace AdbDeviceVitals
 
         private async Task OpenSettings()
         {
-            using (SettingsForm dialog = new SettingsForm(_adb.AdbPath))
+            using (SettingsForm dialog = new SettingsForm(_adb.AdbPath, delegate(IWin32Window owner) { return CheckForUpdates(owner, true); }))
             {
-                if (dialog.ShowDialog(this) != DialogResult.OK) return;
+                if (dialog.ShowDialog(this) != DialogResult.OK || _exitingForUpdate) return;
             }
 
+            if (_exitingForUpdate || IsDisposed) return;
             _adb.ReloadPath();
             StartUsbTethering();
             await RefreshSnapshot(true);
@@ -362,6 +366,88 @@ namespace AdbDeviceVitals
             _tetherCancellation = null;
             if (source == null) return;
             try { source.Cancel(); } catch (ObjectDisposedException) { }
+        }
+
+        private async Task CheckForUpdates(IWin32Window owner, bool manual)
+        {
+            if (!manual && !UpdateChecker.ShouldCheckAutomatically(Application.ExecutablePath)) return;
+            if (!manual)
+            {
+                DateTime? last = AppSettings.LastUpdateCheckUtc;
+                if (last.HasValue && DateTime.UtcNow - last.Value < TimeSpan.FromHours(24)) return;
+            }
+            if (_updateCheckRunning)
+            {
+                if (manual) MessageBox.Show(VisibleOwner(owner), "正在检查更新，请稍候。", "检查更新", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+
+            _updateCheckRunning = true;
+            try
+            {
+                UpdateCheckResult result = await UpdateChecker.CheckAsync();
+                if (IsDisposed || _exitingForUpdate) return;
+                if (!result.ReachedServer)
+                {
+                    if (manual) MessageBox.Show(VisibleOwner(owner), "检查更新失败：" + result.Error, "检查更新", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    return;
+                }
+
+                AppSettings.LastUpdateCheckUtc = DateTime.UtcNow;
+                if (!result.UpdateAvailable)
+                {
+                    if (manual) MessageBox.Show(VisibleOwner(owner), "当前已是最新版本 " + UpdateChecker.CurrentVersionText + "。", "检查更新", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    return;
+                }
+
+                bool development = UpdateChecker.IsDevelopmentBuild(Application.ExecutablePath);
+                string prompt = development
+                    ? "发现新版本 " + result.Tag + "。当前是开发目录中的程序，无法原地更新。是否打开发布页面？"
+                    : "发现新版本 " + result.Tag + "，是否现在更新？";
+                if (MessageBox.Show(VisibleOwner(owner), prompt, "检查更新", MessageBoxButtons.YesNo, MessageBoxIcon.Information) != DialogResult.Yes)
+                    return;
+                if (development)
+                {
+                    UpdateChecker.OpenReleasePage(result.ReleasePage);
+                    return;
+                }
+
+                Notify("检查更新", "正在下载 " + result.Tag + "…", ToolTipIcon.Info);
+                try
+                {
+                    await UpdateChecker.PrepareReplacementAsync(result.Tag);
+                }
+                catch (Exception ex)
+                {
+                    if (!IsDisposed) MessageBox.Show(VisibleOwner(owner), "更新失败：" + ex.Message + "\n将打开发布页面。", "检查更新", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    UpdateChecker.OpenReleasePage(result.ReleasePage);
+                    return;
+                }
+
+                ExitForUpdate();
+            }
+            catch (Exception ex)
+            {
+                if (manual && !IsDisposed) MessageBox.Show(VisibleOwner(owner), "检查更新失败：" + ex.Message, "检查更新", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            }
+            finally
+            {
+                _updateCheckRunning = false;
+            }
+        }
+
+        private void ExitForUpdate()
+        {
+            _exitingForUpdate = true;
+            _allowExit = true;
+            Close();
+        }
+
+        private static IWin32Window VisibleOwner(IWin32Window owner)
+        {
+            Control control = owner as Control;
+            if (control == null || !control.Visible || control.IsDisposed) return null;
+            return owner;
         }
 
         private void OpenLogDirectory()
