@@ -29,7 +29,6 @@ namespace AdbDeviceVitals
         private readonly HistoryChart _chart;
         private Label _connection;
         private Label _updated;
-        private Label _adbPath;
         private bool _polling;
         private bool _allowExit;
         private bool _offlineNotified;
@@ -106,21 +105,17 @@ namespace AdbDeviceVitals
             Controls.Add(root);
 
             Panel header = new Panel { Dock = DockStyle.Fill };
-            Label title = new Label { Text = "ADB DEVICE VITALS", AutoSize = true, Font = new Font("Segoe UI Semibold", 18f), Location = new Point(0, 2) };
-            Label subtitle = new Label { Text = "Android 状态 · 本机读取 · 无需 Root", AutoSize = true, ForeColor = _muted, Location = new Point(2, 38) };
+            Label title = new Label { Text = "ADB DEVICE VITALS", AutoSize = true, Font = new Font("Segoe UI Semibold", 18f), Location = new Point(0, 15) };
             _connection = new Label { Text = "正在连接…", AutoSize = true, ForeColor = _muted, Anchor = AnchorStyles.Top | AnchorStyles.Right, TextAlign = ContentAlignment.MiddleRight };
-            Button refresh = new Button { Text = "刷新", Width = 72, Height = 30, FlatStyle = FlatStyle.Flat, ForeColor = Color.White, BackColor = Color.FromArgb(38, 48, 61), Anchor = AnchorStyles.Top | AnchorStyles.Right };
-            refresh.FlatAppearance.BorderSize = 0;
-            refresh.Click += async delegate { await RefreshSnapshot(true); };
-            Button settings = new Button { Text = "设置", Width = 72, Height = 30, FlatStyle = FlatStyle.Flat, ForeColor = Color.White, BackColor = Color.FromArgb(38, 48, 61), Anchor = AnchorStyles.Top | AnchorStyles.Right };
-            settings.FlatAppearance.BorderSize = 0;
+            Label settings = new Label { Text = "\uE713", Width = 38, Height = 34, AutoSize = false, TextAlign = ContentAlignment.MiddleCenter, ForeColor = Color.White, BackColor = _background, Anchor = AnchorStyles.Top | AnchorStyles.Right, Font = new Font("Segoe MDL2 Assets", 12f), AccessibleName = "设置", AccessibleRole = AccessibleRole.PushButton, Cursor = Cursors.Hand };
+            settings.MouseEnter += delegate { settings.ForeColor = _green; };
+            settings.MouseLeave += delegate { settings.ForeColor = Color.White; };
             settings.Click += async delegate { await OpenSettings(); };
-            header.Controls.Add(title); header.Controls.Add(subtitle); header.Controls.Add(_connection); header.Controls.Add(settings); header.Controls.Add(refresh);
+            header.Controls.Add(title); header.Controls.Add(_connection); header.Controls.Add(settings);
             header.Resize += delegate
             {
-                refresh.Location = new Point(header.Width - refresh.Width, 8);
-                settings.Location = new Point(refresh.Left - settings.Width - 8, 8);
-                _connection.Location = new Point(settings.Left - _connection.Width - 14, 15);
+                settings.Location = new Point(header.Width - settings.Width, 12);
+                _connection.Location = new Point(settings.Left - _connection.Width - 14, 21);
             };
             root.Controls.Add(header, 0, 0);
 
@@ -128,7 +123,7 @@ namespace AdbDeviceVitals
             for (int i = 0; i < 3; i++) cards.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33.333f));
             for (int i = 0; i < 2; i++) cards.RowStyles.Add(new RowStyle(SizeType.Percent, 50f));
             AddCard(cards, 0, 0, "network", "蜂窝网络");
-            AddCard(cards, 1, 0, "hotspot", "热点");
+            AddCard(cards, 1, 0, "hotspot", "网络共享");
             AddCard(cards, 2, 0, "battery", "电池");
             AddCard(cards, 0, 1, "thermal", "温度与热状态");
             AddCard(cards, 1, 1, "traffic", "实时流量");
@@ -141,9 +136,7 @@ namespace AdbDeviceVitals
 
             Panel footer = new Panel { Dock = DockStyle.Fill };
             _updated = new Label { Text = "尚未采集", AutoSize = true, ForeColor = _muted, Location = new Point(0, 7) };
-            _adbPath = new Label { Text = AdbPathText(), AutoEllipsis = true, ForeColor = _muted, AutoSize = false, TextAlign = ContentAlignment.MiddleRight, Anchor = AnchorStyles.Top | AnchorStyles.Right };
-            footer.Controls.Add(_updated); footer.Controls.Add(_adbPath);
-            footer.Resize += delegate { _adbPath.SetBounds(Math.Max(240, footer.Width / 2), 3, Math.Max(100, footer.Width / 2), 22); };
+            footer.Controls.Add(_updated);
             root.Controls.Add(footer, 0, 3);
         }
 
@@ -155,13 +148,7 @@ namespace AdbDeviceVitals
             }
 
             _adb.ReloadPath();
-            _adbPath.Text = AdbPathText();
             await RefreshSnapshot(true);
-        }
-
-        private string AdbPathText()
-        {
-            return _adb.IsAvailable ? "ADB: " + _adb.AdbPath : "ADB 未找到";
         }
 
         private void AddCard(TableLayoutPanel grid, int column, int row, string key, string title)
@@ -214,7 +201,7 @@ namespace AdbDeviceVitals
             _connection.Text = "● 设备在线";
             _connection.ForeColor = _green;
             SetCard("network", SafeText(s.NetworkType, "未知网络"), SafeText(s.OperatorName, "未知运营商") + "  ·  " + FormatSignal(s));
-            SetCard("hotspot", s.HotspotActive ? SafeText(s.HotspotBand, "已开启") : "未开启", s.HotspotActive ? s.ConnectedClients + " 台设备  ·  " + Frequency(s.HotspotFrequencyMhz) : "未检测到 Wi-Fi 热点");
+            SetCard("hotspot", TetheringTitle(s), TetheringDetail(s));
             SetCard("battery", s.BatteryLevel.HasValue ? s.BatteryLevel.Value + "%" : "—", s.BatteryStatus + "  ·  " + s.PowerSource + "  ·  " + Voltage(s.BatteryVoltageV));
             SetCard("thermal", Temperature(s.BatteryTemperatureC), "系统热状态：" + ThermalName(s.ThermalStatus));
             SetCard("traffic", "↓ " + s.DownloadMbps.ToString("0.00", CultureInfo.InvariantCulture) + " Mbps", "↑ " + s.UploadMbps.ToString("0.00", CultureInfo.InvariantCulture) + " Mbps  ·  " + SafeText(s.UpstreamInterface, "自动接口"));
@@ -306,6 +293,37 @@ namespace AdbDeviceVitals
             string result = s.RsrpDbm.Value + " dBm";
             if (s.SinrDb.HasValue) result += "  ·  SINR " + s.SinrDb.Value + " dB";
             return result;
+        }
+
+        private static string TetheringTitle(DeviceSnapshot value)
+        {
+            if (value.UsbTetheringActive && value.HotspotActive) return "USB + Wi-Fi";
+            if (value.UsbTetheringActive) return "USB 网络共享";
+            if (value.HotspotActive) return "Wi-Fi 热点";
+            return "未开启";
+        }
+
+        private static string TetheringDetail(DeviceSnapshot value)
+        {
+            if (!value.UsbTetheringActive && !value.HotspotActive) return "未检测到网络共享";
+
+            List<string> details = new List<string>();
+            if (!string.IsNullOrWhiteSpace(value.UpstreamInterface)) details.Add("上游 " + value.UpstreamInterface);
+            if (value.UsbTetheringActive && value.HotspotActive)
+            {
+                details.Add("USB " + value.UsbTetheringClients + " 台");
+                details.Add("Wi-Fi " + value.ConnectedClients + " 台");
+            }
+            else if (value.UsbTetheringActive)
+            {
+                details.Add(value.UsbTetheringClients + " 台设备");
+            }
+            else
+            {
+                details.Add(SafeText(value.HotspotBand, "Wi-Fi"));
+                details.Add(value.ConnectedClients + " 台设备");
+            }
+            return string.Join("  ·  ", details.ToArray());
         }
 
         private static string Temperature(double? value) { return value.HasValue ? value.Value.ToString("0.0") + " °C" : "—"; }

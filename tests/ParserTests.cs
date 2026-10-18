@@ -12,6 +12,7 @@ internal static class ParserTests
         Battery();
         Telephony();
         Hotspot();
+        UsbTethering();
         NetworkStats();
         Console.WriteLine(_failed == 0 ? "All parser tests passed." : _failed + " parser test(s) failed.");
         return _failed == 0 ? 0 : 1;
@@ -48,6 +49,28 @@ internal static class ParserTests
         Equal(1, value.ConnectedClients, "hotspot clients");
         Equal("rmnet_data2", value.UpstreamInterface, "upstream");
         Equal("2.4 GHz", value.HotspotBand, "hotspot band");
+    }
+
+    private static void UsbTethering()
+    {
+        DeviceSnapshot value = new DeviceSnapshot();
+        string sample = "rndis0 - TetheredState - lastError = 0\n" +
+            "wlan1 - TetheredState - lastError = 0\n" +
+            "Current upstream interface(s): [rmnet_data2]\n" +
+            "{name=rndis0 state=TetheredState={client: /192.168.114.101}}\n" +
+            "{name=wlan1 state=TetheredState={client: /192.168.148.2, client: /192.168.148.3}}";
+        AdbParsers.ParseTethering(sample, value);
+        Equal(true, value.UsbTetheringActive, "USB tethering active");
+        Equal(1, value.UsbTetheringClients, "USB tethering clients");
+        Equal(true, value.HotspotActive, "simultaneous hotspot active");
+        Equal(2, value.ConnectedClients, "simultaneous hotspot clients");
+        Equal("rmnet_data2", value.UpstreamInterface, "USB tethering upstream");
+
+        AdbParsers.ParseTethering("Tether state:\n", value);
+        Equal(false, value.UsbTetheringActive, "USB tethering reset");
+        Equal(0, value.UsbTetheringClients, "USB tethering clients reset");
+        Equal(false, value.HotspotActive, "hotspot reset");
+        Equal(string.Empty, value.UpstreamInterface, "upstream reset");
     }
 
     private static void NetworkStats()

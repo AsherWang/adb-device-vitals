@@ -32,6 +32,8 @@ namespace AdbDeviceVitals.Models
         public int ConnectedClients { get; set; }
         public int? HotspotFrequencyMhz { get; set; }
         public string HotspotBand { get; set; }
+        public bool UsbTetheringActive { get; set; }
+        public int UsbTetheringClients { get; set; }
         public string UpstreamInterface { get; set; }
 
         public long? CellularRxBytes { get; set; }

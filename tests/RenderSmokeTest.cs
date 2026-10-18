@@ -45,13 +45,21 @@ internal static class RenderSmokeTest
             sample.HotspotBand = "2.4 GHz";
             sample.HotspotFrequencyMhz = 2412;
             sample.ConnectedClients = 1;
+            sample.UsbTetheringActive = true;
+            sample.UsbTetheringClients = 1;
             sample.UpstreamInterface = "rmnet_data2";
             sample.DownloadMbps = 25.31;
             sample.UploadMbps = 3.20;
 
             MethodInfo update = typeof(MainForm).GetMethod("UpdateUi", BindingFlags.Instance | BindingFlags.NonPublic);
             if (update == null) return 3;
-            update.Invoke(form, new object[] { sample });
+            for (int i = 0; i < 12; i++)
+            {
+                sample.Timestamp = DateTime.Now.AddSeconds(i);
+                sample.BatteryTemperatureC = 32.0 + i * 0.4;
+                sample.RsrpDbm = -96 + i;
+                update.Invoke(form, new object[] { sample });
+            }
             Application.DoEvents();
 
             using (Bitmap bitmap = new Bitmap(form.ClientSize.Width, form.ClientSize.Height))

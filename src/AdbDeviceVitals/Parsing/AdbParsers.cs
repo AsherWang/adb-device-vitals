@@ -99,23 +99,26 @@ namespace AdbDeviceVitals.Parsing
         public static void ParseTethering(string output, DeviceSnapshot snapshot)
         {
             string text = output ?? string.Empty;
-            snapshot.HotspotActive = Regex.IsMatch(text, @"(?:wlan|softap)\d+\s+-\s+TetheredState\s+-\s+lastError\s*=\s*0", RegexOptions.IgnoreCase);
+            snapshot.HotspotActive = Regex.IsMatch(text, @"^\s*(?:(?:wlan|softap)\d+|ap_br_(?:wlan|softap)\d*)\s+-\s+TetheredState(?:\s+-\s+lastError\s*=\s*0)?", RegexOptions.IgnoreCase | RegexOptions.Multiline);
+            snapshot.UsbTetheringActive = Regex.IsMatch(text, @"^\s*(?:rndis|usb|ncm)\d+\s+-\s+TetheredState(?:\s+-\s+lastError\s*=\s*0)?", RegexOptions.IgnoreCase | RegexOptions.Multiline);
 
             Match upstream = Regex.Match(text, @"Current upstream interface\(s\):\s*\[([^\]]+)\]", RegexOptions.IgnoreCase);
-            if (upstream.Success) snapshot.UpstreamInterface = upstream.Groups[1].Value.Trim().Split(',')[0].Trim();
+            snapshot.UpstreamInterface = upstream.Success ? upstream.Groups[1].Value.Trim().Split(',')[0].Trim() : string.Empty;
 
-            int clients = 0;
+            int wifiClients = 0;
+            int usbClients = 0;
             string[] lines = text.Replace("\r", string.Empty).Split('\n');
             foreach (string line in lines)
             {
-                if (line.IndexOf("state=TetheredState", StringComparison.OrdinalIgnoreCase) >= 0 &&
-                    (line.IndexOf("name=wlan", StringComparison.OrdinalIgnoreCase) >= 0 || line.IndexOf("name=softap", StringComparison.OrdinalIgnoreCase) >= 0))
-                {
-                    clients = Regex.Matches(line, @"client:\s*/", RegexOptions.IgnoreCase).Count;
-                    break;
-                }
+                if (line.IndexOf("state=TetheredState", StringComparison.OrdinalIgnoreCase) < 0) continue;
+                int clients = Regex.Matches(line, @"client:\s*/", RegexOptions.IgnoreCase).Count;
+                if (Regex.IsMatch(line, @"name=(?:(?:wlan|softap)\d+|ap_br_(?:wlan|softap)\d*)", RegexOptions.IgnoreCase))
+                    wifiClients += clients;
+                else if (Regex.IsMatch(line, @"name=(?:rndis|usb|ncm)\d+", RegexOptions.IgnoreCase))
+                    usbClients += clients;
             }
-            snapshot.ConnectedClients = clients;
+            snapshot.ConnectedClients = wifiClients;
+            snapshot.UsbTetheringClients = usbClients;
         }
 
         public static void ParseWifi(string output, DeviceSnapshot snapshot)
