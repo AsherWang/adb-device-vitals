@@ -27,21 +27,32 @@ namespace AdbDeviceVitals
         private readonly System.Threading.EventWaitHandle _activationEvent;
         private readonly NotifyIcon _tray;
         private readonly HistoryChart _chart;
+        private bool _hideUntilRestored;
         private Label _connection;
         private Label _updated;
+        private Label _tetherStatus;
+        private System.Threading.CancellationTokenSource _tetherCancellation;
         private bool _polling;
         private bool _allowExit;
         private bool _offlineNotified;
+        private bool _backgroundStarted;
+        private bool _usbTetherRunning;
+        private bool _applyingStartupVisibility;
         private DateTime _lastLog = DateTime.MinValue;
         private DateTime _lastThermalAlert = DateTime.MinValue;
 
-        public MainForm() : this(null)
+        public MainForm() : this(null, false)
         {
         }
 
-        internal MainForm(System.Threading.EventWaitHandle activationEvent)
+        internal MainForm(System.Threading.EventWaitHandle activationEvent) : this(activationEvent, false)
+        {
+        }
+
+        internal MainForm(System.Threading.EventWaitHandle activationEvent, bool startInTray)
         {
             _activationEvent = activationEvent;
+            _hideUntilRestored = startInTray;
             Text = "ADB Device Vitals";
             try { Icon = System.Drawing.Icon.ExtractAssociatedIcon(Application.ExecutablePath); } catch { }
             StartPosition = FormStartPosition.CenterScreen;
@@ -81,14 +92,36 @@ namespace AdbDeviceVitals
                 if (_activationEvent != null && _activationEvent.WaitOne(0)) RestoreWindow();
             };
 
-            Shown += async delegate
-            {
-                _timer.Start();
-                if (_activationEvent != null) _activationTimer.Start();
-                await RefreshSnapshot(true);
-            };
+            HandleCreated += delegate { StartBackgroundWork(); };
+            if (startInTray) ShowInTaskbar = false;
+            if (IsHandleCreated) StartBackgroundWork();
             Resize += delegate { if (WindowState == FormWindowState.Minimized) Hide(); };
             FormClosing += OnFormClosing;
+        }
+
+        protected override void SetVisibleCore(bool value)
+        {
+            if (_hideUntilRestored)
+            {
+                value = false;
+                if (!_applyingStartupVisibility && !IsHandleCreated)
+                {
+                    _applyingStartupVisibility = true;
+                    CreateHandle();
+                    _applyingStartupVisibility = false;
+                }
+            }
+            base.SetVisibleCore(value);
+        }
+
+        private async void StartBackgroundWork()
+        {
+            if (_backgroundStarted) return;
+            _backgroundStarted = true;
+            _timer.Start();
+            if (_activationEvent != null) _activationTimer.Start();
+            await RefreshSnapshot(true);
+            StartUsbTethering();
         }
 
         private void BuildLayout()
@@ -136,7 +169,19 @@ namespace AdbDeviceVitals
 
             Panel footer = new Panel { Dock = DockStyle.Fill };
             _updated = new Label { Text = "尚未采集", AutoSize = true, ForeColor = _muted, Location = new Point(0, 7) };
+            _tetherStatus = new Label
+            {
+                AutoSize = false,
+                AutoEllipsis = true,
+                TextAlign = ContentAlignment.MiddleRight,
+                ForeColor = _muted,
+                Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right,
+                Location = new Point(240, 5),
+                Height = 20
+            };
+            footer.Resize += delegate { _tetherStatus.Width = Math.Max(80, footer.Width - _tetherStatus.Left); };
             footer.Controls.Add(_updated);
+            footer.Controls.Add(_tetherStatus);
             root.Controls.Add(footer, 0, 3);
         }
 
@@ -148,6 +193,7 @@ namespace AdbDeviceVitals
             }
 
             _adb.ReloadPath();
+            StartUsbTethering();
             await RefreshSnapshot(true);
         }
 
@@ -214,11 +260,9 @@ namespace AdbDeviceVitals
         {
             if (!s.Connected)
             {
-                if (!_offlineNotified)
-                {
-                    Notify("设备已断开", s.Error, ToolTipIcon.Warning);
-                    _offlineNotified = true;
-                }
+                if (_usbTetherRunning || _offlineNotified) return;
+                Notify("设备已断开", s.Error, ToolTipIcon.Warning);
+                _offlineNotified = true;
                 return;
             }
             _offlineNotified = false;
@@ -252,9 +296,72 @@ namespace AdbDeviceVitals
 
         private void RestoreWindow()
         {
+            _hideUntilRestored = false;
+            ShowInTaskbar = true;
             Show();
             WindowState = FormWindowState.Normal;
             Activate();
+        }
+
+        private void StartUsbTethering()
+        {
+            CancelUsbTethering();
+            if (!AppSettings.AutoEnableUsbTethering)
+            {
+                ShowTetherStatus(string.Empty, _muted);
+                return;
+            }
+
+            System.Threading.CancellationTokenSource source = new System.Threading.CancellationTokenSource();
+            _tetherCancellation = source;
+            _usbTetherRunning = true;
+            ShowTetherStatus("正在检查 USB 网络共享…", _muted);
+            UsbTetheringService service = new UsbTetheringService(_adb);
+            service.EnsureAsync(source.Token).ContinueWith(delegate(Task<UsbTetherResult> completed)
+            {
+                if (source.IsCancellationRequested || !object.ReferenceEquals(_tetherCancellation, source)) return;
+                UsbTetherResult result = completed.IsFaulted
+                    ? UsbTetherResult.Failed(completed.Exception.GetBaseException().Message)
+                    : completed.Result;
+                if (IsDisposed || !IsHandleCreated) return;
+                try
+                {
+                    BeginInvoke(new MethodInvoker(delegate
+                    {
+                        if (IsDisposed || !object.ReferenceEquals(_tetherCancellation, source)) return;
+                        ShowTetherResult(result);
+                    }));
+                }
+                catch (InvalidOperationException)
+                {
+                }
+            }, System.Threading.CancellationToken.None, TaskContinuationOptions.None, TaskScheduler.Default);
+        }
+
+        private void ShowTetherResult(UsbTetherResult result)
+        {
+            _usbTetherRunning = false;
+            if (!result.Completed) return;
+            ShowTetherStatus(result.Message, result.Succeeded ? _green : Color.FromArgb(255, 174, 66));
+            if (!result.Succeeded)
+                Notify("USB 网络共享", result.Message, ToolTipIcon.Warning);
+            else if (result.Changed)
+                Notify("USB 网络共享", result.Message, ToolTipIcon.Info);
+        }
+
+        private void ShowTetherStatus(string message, Color color)
+        {
+            _tetherStatus.Text = message;
+            _tetherStatus.ForeColor = color;
+        }
+
+        private void CancelUsbTethering()
+        {
+            _usbTetherRunning = false;
+            System.Threading.CancellationTokenSource source = _tetherCancellation;
+            _tetherCancellation = null;
+            if (source == null) return;
+            try { source.Cancel(); } catch (ObjectDisposedException) { }
         }
 
         private void OpenLogDirectory()
@@ -272,6 +379,7 @@ namespace AdbDeviceVitals
                 Notify("ADB Device Vitals", "程序仍在托盘中监控设备。", ToolTipIcon.Info);
                 return;
             }
+            CancelUsbTethering();
             _tray.Visible = false;
             _tray.Dispose();
         }
@@ -280,6 +388,7 @@ namespace AdbDeviceVitals
         {
             if (disposing)
             {
+                CancelUsbTethering();
                 if (_timer != null) _timer.Dispose();
                 if (_activationTimer != null) _activationTimer.Dispose();
                 if (_chart != null) _chart.Dispose();

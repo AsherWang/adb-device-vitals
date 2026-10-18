@@ -121,6 +121,14 @@ namespace AdbDeviceVitals.Parsing
             snapshot.UsbTetheringClients = usbClients;
         }
 
+        public static bool IsUsbTetheringReady(string output)
+        {
+            return Regex.IsMatch(
+                output ?? string.Empty,
+                @"^\s*(?:rndis|ncm|usb)\d+\s+-\s+TetheredState\s+-\s+lastError\s*=\s*0\b",
+                RegexOptions.IgnoreCase | RegexOptions.Multiline);
+        }
+
         public static void ParseWifi(string output, DeviceSnapshot snapshot)
         {
             string text = output ?? string.Empty;

@@ -39,6 +39,7 @@
     <Compile Include="Services\AppSettings.cs" />
     <Compile Include="Services\CsvLogger.cs" />
     <Compile Include="Services\DeviceMonitor.cs" />
+    <Compile Include="Services\UsbTetheringService.cs" />
     <Compile Include="MainForm.cs" />
     <Compile Include="Program.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />

@@ -71,6 +71,12 @@ internal static class ParserTests
         Equal(0, value.UsbTetheringClients, "USB tethering clients reset");
         Equal(false, value.HotspotActive, "hotspot reset");
         Equal(string.Empty, value.UpstreamInterface, "upstream reset");
+
+        Equal(true, AdbParsers.IsUsbTetheringReady(sample), "usb tether ready");
+        Equal(true, AdbParsers.IsUsbTetheringReady("  ncm0 - TetheredState - lastError = 0"), "ncm tether ready");
+        Equal(false, AdbParsers.IsUsbTetheringReady("rndis0 - TetheredState - lastError = 11"), "usb tether error");
+        Equal(false, AdbParsers.IsUsbTetheringReady("rndis0 - TetheredState"), "usb tether without error code");
+        Equal(false, AdbParsers.IsUsbTetheringReady("wlan0 - TetheredState - lastError = 0"), "wifi is not usb tether");
     }
 
     private static void NetworkStats()

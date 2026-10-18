@@ -9,6 +9,8 @@ namespace AdbDeviceVitals
     public sealed class SettingsForm : Form
     {
         private readonly TextBox _adbDirectory;
+        private readonly CheckBox _runAtStartup;
+        private readonly CheckBox _autoEnableUsbTethering;
 
         public SettingsForm(string detectedAdbPath)
         {
@@ -19,7 +21,7 @@ namespace AdbDeviceVitals
             MaximizeBox = false;
             MinimizeBox = false;
             ShowInTaskbar = false;
-            ClientSize = new Size(560, 205);
+            ClientSize = new Size(560, 286);
             Font = new Font("Segoe UI", 9f);
 
             Label heading = new Label
@@ -55,10 +57,25 @@ namespace AdbDeviceVitals
                 Size = new Size(520, 22)
             };
 
-            Button clear = new Button { Text = "恢复自动查找", Location = new Point(20, 160), Size = new Size(112, 30) };
+            _runAtStartup = new CheckBox
+            {
+                Text = "开机自启动",
+                AutoSize = true,
+                Location = new Point(20, 156),
+                Checked = AppSettings.RunAtStartup
+            };
+            _autoEnableUsbTethering = new CheckBox
+            {
+                Text = "启动后自动开启 USB 网络共享",
+                AutoSize = true,
+                Location = new Point(20, 184),
+                Checked = AppSettings.AutoEnableUsbTethering
+            };
+
+            Button clear = new Button { Text = "恢复自动查找", Location = new Point(20, 236), Size = new Size(112, 30) };
             clear.Click += delegate { _adbDirectory.Text = string.Empty; };
-            Button cancel = new Button { Text = "取消", DialogResult = DialogResult.Cancel, Location = new Point(358, 160), Size = new Size(86, 30) };
-            Button save = new Button { Text = "保存", Location = new Point(454, 160), Size = new Size(86, 30) };
+            Button cancel = new Button { Text = "取消", DialogResult = DialogResult.Cancel, Location = new Point(358, 236), Size = new Size(86, 30) };
+            Button save = new Button { Text = "保存", Location = new Point(454, 236), Size = new Size(86, 30) };
             save.Click += SaveSettings;
 
             Controls.Add(heading);
@@ -66,6 +83,8 @@ namespace AdbDeviceVitals
             Controls.Add(_adbDirectory);
             Controls.Add(browse);
             Controls.Add(current);
+            Controls.Add(_runAtStartup);
+            Controls.Add(_autoEnableUsbTethering);
             Controls.Add(clear);
             Controls.Add(cancel);
             Controls.Add(save);
@@ -96,6 +115,8 @@ namespace AdbDeviceVitals
             try
             {
                 AppSettings.AdbDirectory = directory;
+                AppSettings.AutoEnableUsbTethering = _autoEnableUsbTethering.Checked;
+                AppSettings.RunAtStartup = _runAtStartup.Checked;
                 DialogResult = DialogResult.OK;
                 Close();
             }

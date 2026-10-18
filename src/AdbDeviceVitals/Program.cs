@@ -1,6 +1,7 @@
 using System;
 using System.Threading;
 using System.Windows.Forms;
+using AdbDeviceVitals.Services;
 
 namespace AdbDeviceVitals
 {
@@ -24,8 +25,19 @@ namespace AdbDeviceVitals
 
                 Application.EnableVisualStyles();
                 Application.SetCompatibleTextRenderingDefault(false);
-                Application.Run(new MainForm(activationEvent));
+                Application.Run(new MainForm(activationEvent, IsStartupLaunch()));
             }
+        }
+
+        private static bool IsStartupLaunch()
+        {
+            string[] args = Environment.GetCommandLineArgs();
+            for (int i = 1; i < args.Length; i++)
+            {
+                if (string.Equals(args[i], AppSettings.StartupArgument, StringComparison.OrdinalIgnoreCase))
+                    return true;
+            }
+            return false;
         }
     }
 }
