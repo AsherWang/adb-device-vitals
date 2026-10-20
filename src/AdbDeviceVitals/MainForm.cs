@@ -31,6 +31,9 @@ namespace AdbDeviceVitals
         private Label _connection;
         private Label _updated;
         private Label _tetherStatus;
+        private CheckBox _usbTetherSwitch;
+        private bool _suppressTetherSwitch;
+        private bool _tetherSwitchBusy;
         private System.Threading.CancellationTokenSource _tetherCancellation;
         private bool _polling;
         private bool _allowExit;
@@ -209,6 +212,21 @@ namespace AdbDeviceVitals
             Label detail = new Label { Text = "等待数据", AutoSize = false, ForeColor = _muted, Location = new Point(16, 79), Height = 42, Anchor = AnchorStyles.Left | AnchorStyles.Right | AnchorStyles.Top };
             panel.Controls.Add(heading); panel.Controls.Add(value); panel.Controls.Add(detail);
             panel.Resize += delegate { detail.Width = Math.Max(80, panel.Width - 30); };
+            if (key == "hotspot")
+            {
+                _usbTetherSwitch = new CheckBox
+                {
+                    Text = "USB 共享",
+                    AutoSize = true,
+                    ForeColor = Color.White,
+                    BackColor = _card,
+                    Anchor = AnchorStyles.Top | AnchorStyles.Right,
+                    Enabled = false
+                };
+                panel.Controls.Add(_usbTetherSwitch);
+                panel.Resize += delegate { _usbTetherSwitch.Location = new Point(Math.Max(80, panel.Width - _usbTetherSwitch.Width - 10), 8); };
+                _usbTetherSwitch.CheckedChanged += async delegate { await OnUsbTetherSwitchChanged(); };
+            }
             grid.Controls.Add(panel, column, row);
             _cards[key] = new CardLabels(value, detail);
         }
@@ -245,6 +263,7 @@ namespace AdbDeviceVitals
                 _connection.Text = s.Error;
                 _connection.ForeColor = Color.FromArgb(255, 174, 66);
                 SetCard("device", "未连接", "请检查 USB 调试和设备授权");
+                SyncUsbSwitch(false, false);
                 return;
             }
 
@@ -252,6 +271,7 @@ namespace AdbDeviceVitals
             _connection.ForeColor = _green;
             SetCard("network", SafeText(s.NetworkType, "未知网络"), SafeText(s.OperatorName, "未知运营商") + "  ·  " + FormatSignal(s));
             SetCard("hotspot", TetheringTitle(s), TetheringDetail(s));
+            SyncUsbSwitch(true, s.UsbTetheringActive);
             SetCard("battery", s.BatteryLevel.HasValue ? s.BatteryLevel.Value + "%" : "—", s.BatteryStatus + "  ·  " + s.PowerSource + "  ·  " + Voltage(s.BatteryVoltageV));
             SetCard("thermal", Temperature(s.BatteryTemperatureC), "系统热状态：" + ThermalName(s.ThermalStatus));
             SetCard("traffic", "↓ " + s.DownloadMbps.ToString("0.00", CultureInfo.InvariantCulture) + " Mbps", "↑ " + s.UploadMbps.ToString("0.00", CultureInfo.InvariantCulture) + " Mbps  ·  " + SafeText(s.UpstreamInterface, "自动接口"));
@@ -351,6 +371,41 @@ namespace AdbDeviceVitals
                 Notify("USB 网络共享", result.Message, ToolTipIcon.Warning);
             else if (result.Changed)
                 Notify("USB 网络共享", result.Message, ToolTipIcon.Info);
+        }
+
+        private void SyncUsbSwitch(bool connected, bool active)
+        {
+            if (_usbTetherSwitch == null || _tetherSwitchBusy) return;
+            _suppressTetherSwitch = true;
+            _usbTetherSwitch.Enabled = connected;
+            _usbTetherSwitch.Checked = connected && active;
+            _suppressTetherSwitch = false;
+        }
+
+        private async Task OnUsbTetherSwitchChanged()
+        {
+            if (_suppressTetherSwitch || _usbTetherSwitch == null) return;
+            bool enable = _usbTetherSwitch.Checked;
+            _tetherSwitchBusy = true;
+            _usbTetherSwitch.Enabled = false;
+            CancelUsbTethering();
+            ShowTetherStatus(enable ? "正在开启 USB 网络共享…" : "正在关闭 USB 网络共享…", _muted);
+            try
+            {
+                UsbTetherResult result = await new UsbTetheringService(_adb).SetEnabledAsync(enable, System.Threading.CancellationToken.None);
+                if (IsDisposed) return;
+                ShowTetherResult(result);
+                await RefreshSnapshot(true);
+            }
+            catch (Exception ex)
+            {
+                if (!IsDisposed) ShowTetherStatus(ex.Message, Color.FromArgb(255, 174, 66));
+            }
+            finally
+            {
+                _tetherSwitchBusy = false;
+                if (!IsDisposed && _usbTetherSwitch != null) _usbTetherSwitch.Enabled = true;
+            }
         }
 
         private void ShowTetherStatus(string message, Color color)

@@ -102,6 +102,9 @@ internal static class ParserTests
         Equal(true, UpdateChecker.ShouldCheckAutomatically(@"C:\Users\ash\Desktop\AdbDeviceVitals.exe"), "installed exe");
         Equal(false, UpdateChecker.ShouldCheckAutomatically(@"D:\src\AdbDeviceVitals\bin\Release\AdbDeviceVitals.exe"), "dev exe");
         Equal(false, UpdateChecker.ShouldCheckAutomatically(@"D:\artifacts\tests\RenderSmokeTest.exe"), "test exe");
+        Equal(true, UsbTetheringService.IsUsbFunctionChangeAcknowledged("setCurrentFunctions opId:1", string.Empty), "usb function ack");
+        Equal(false, UsbTetheringService.IsUsbFunctionChangeAcknowledged("setCurrentFunctions opId:1", "Error communicating with UsbManager"), "usb function error");
+        Equal(false, UsbTetheringService.IsUsbFunctionChangeAcknowledged(string.Empty, "Unknown command"), "usb function unknown");
     }
 
     private static void Equal(object expected, object actual, string name)
