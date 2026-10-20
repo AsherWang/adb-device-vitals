@@ -75,7 +75,7 @@ namespace AdbDeviceVitals.Services
         public async Task<UsbTetherResult> EnsureAsync(CancellationToken cancellationToken)
         {
             TetherLog log = new TetherLog();
-            log.Write("auto-enable start");
+            log.Write("auto-enable start adb=" + _adb.AdbPath);
             try
             {
                 UsbTetherResult result = await EnsureCoreAsync(cancellationToken, log).ConfigureAwait(false);
@@ -233,8 +233,14 @@ namespace AdbDeviceVitals.Services
 
         private async Task<IList<AdbDevice>> ListLoggedAsync(TetherLog log)
         {
-            IList<AdbDevice> devices = await _adb.ListDevicesAsync().ConfigureAwait(false);
-            if (devices.Count == 0) log.Write("devices empty");
+            DeviceListResult listed = await _adb.QueryDevicesAsync().ConfigureAwait(false);
+            IList<AdbDevice> devices = listed.Devices;
+            if (devices.Count == 0)
+            {
+                log.Write("devices empty exit=" + listed.Command.ExitCode
+                    + " stdout=" + OneLine(listed.Command.Output)
+                    + " stderr=" + OneLine(listed.Command.Error));
+            }
             foreach (AdbDevice device in devices)
                 log.Write("list " + device.Serial + " state=" + device.State + " model=" + device.Model);
             return devices;

@@ -4,12 +4,14 @@ using System.Diagnostics;
 using System.IO;
 using System.Text;
 using System.Text.RegularExpressions;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace AdbDeviceVitals.Services
 {
     public sealed class AdbClient
     {
+        private readonly object _gate = new object();
         public string AdbPath { get; private set; }
 
         public AdbClient()
@@ -29,10 +31,21 @@ namespace AdbDeviceVitals.Services
 
         public async Task<IList<AdbDevice>> ListDevicesAsync()
         {
+            DeviceListResult listed = await QueryDevicesAsync().ConfigureAwait(false);
+            return listed.Devices;
+        }
+
+        public async Task<DeviceListResult> QueryDevicesAsync()
+        {
+            if (!IsAvailable) return new DeviceListResult(new CommandResult(-1, string.Empty, "adb.exe was not found."), new List<AdbDevice>());
+            CommandResult result = await RunAsync("devices -l", 8000).ConfigureAwait(false);
+            return new DeviceListResult(result, ParseDevices(result.Output));
+        }
+
+        public static IList<AdbDevice> ParseDevices(string output)
+        {
             List<AdbDevice> devices = new List<AdbDevice>();
-            if (!IsAvailable) return devices;
-            CommandResult result = await RunAsync("devices -l", 5000).ConfigureAwait(false);
-            string[] lines = result.Output.Replace("\r", string.Empty).Split('\n');
+            string[] lines = (output ?? string.Empty).Replace("\r", string.Empty).Split('\n');
             foreach (string raw in lines)
             {
                 string line = raw.Trim();
@@ -55,32 +68,82 @@ namespace AdbDeviceVitals.Services
 
         public Task<CommandResult> RunAsync(string arguments, int timeoutMs)
         {
-            return Task.Run(delegate
-            {
-                if (!IsAvailable) return new CommandResult(-1, string.Empty, "adb.exe was not found.");
-                ProcessStartInfo start = new ProcessStartInfo();
-                start.FileName = AdbPath;
-                start.Arguments = arguments;
-                start.UseShellExecute = false;
-                start.CreateNoWindow = true;
-                start.RedirectStandardOutput = true;
-                start.RedirectStandardError = true;
-                start.StandardOutputEncoding = Encoding.UTF8;
-                start.StandardErrorEncoding = Encoding.UTF8;
+            return Task.Run(delegate { return RunWithRecovery(arguments, timeoutMs); });
+        }
 
-                using (Process process = Process.Start(start))
+        private CommandResult RunWithRecovery(string arguments, int timeoutMs)
+        {
+            lock (_gate)
+            {
+                CommandResult result = Execute(arguments, timeoutMs);
+                if (IsStartServer(arguments) || !IsDaemonFault(result)) return result;
+
+                TetherLog log = new TetherLog();
+                log.Write("daemon fault adb=" + AdbPath + " args=" + arguments + " exit=" + result.ExitCode + " " + Brief(result));
+                Execute("start-server", 10000);
+                Thread.Sleep(400);
+                result = Execute(arguments, timeoutMs);
+                if (!IsDaemonFault(result))
                 {
-                    Task<string> outputTask = process.StandardOutput.ReadToEndAsync();
-                    Task<string> errorTask = process.StandardError.ReadToEndAsync();
-                    if (!process.WaitForExit(timeoutMs))
-                    {
-                        try { process.Kill(); } catch { }
-                        return new CommandResult(-2, outputTask.Result, "ADB command timed out.");
-                    }
-                    Task.WaitAll(outputTask, errorTask);
-                    return new CommandResult(process.ExitCode, outputTask.Result, errorTask.Result);
+                    log.Write("daemon retry ok args=" + arguments);
+                    return result;
                 }
-            });
+
+                Thread.Sleep(800);
+                result = Execute(arguments, timeoutMs);
+                log.Write("daemon retry exit=" + result.ExitCode + " " + Brief(result));
+                return result;
+            }
+        }
+
+        private CommandResult Execute(string arguments, int timeoutMs)
+        {
+            if (!IsAvailable) return new CommandResult(-1, string.Empty, "adb.exe was not found.");
+            ProcessStartInfo start = new ProcessStartInfo();
+            start.FileName = AdbPath;
+            start.Arguments = arguments;
+            start.UseShellExecute = false;
+            start.CreateNoWindow = true;
+            start.RedirectStandardOutput = true;
+            start.RedirectStandardError = true;
+            start.StandardOutputEncoding = Encoding.UTF8;
+            start.StandardErrorEncoding = Encoding.UTF8;
+
+            using (Process process = Process.Start(start))
+            {
+                Task<string> outputTask = process.StandardOutput.ReadToEndAsync();
+                Task<string> errorTask = process.StandardError.ReadToEndAsync();
+                if (!process.WaitForExit(timeoutMs))
+                {
+                    try { process.Kill(); } catch { }
+                    return new CommandResult(-2, outputTask.Result, "ADB command timed out.");
+                }
+                Task.WaitAll(outputTask, errorTask);
+                return new CommandResult(process.ExitCode, outputTask.Result, errorTask.Result);
+            }
+        }
+
+        private static bool IsStartServer(string arguments)
+        {
+            return (arguments ?? string.Empty).IndexOf("start-server", StringComparison.OrdinalIgnoreCase) >= 0;
+        }
+
+        private static bool IsDaemonFault(CommandResult result)
+        {
+            if (result != null && result.ExitCode == 0) return false;
+            string text = ((result == null ? string.Empty : result.Error) + "\n" + (result == null ? string.Empty : result.Output)).ToLowerInvariant();
+            if (text.IndexOf("daemon started successfully", StringComparison.Ordinal) >= 0) return false;
+            return text.IndexOf("protocol fault", StringComparison.Ordinal) >= 0
+                || text.IndexOf("connection reset", StringComparison.Ordinal) >= 0
+                || text.IndexOf("cannot connect to daemon", StringComparison.Ordinal) >= 0
+                || text.IndexOf("failed to check server version", StringComparison.Ordinal) >= 0;
+        }
+
+        private static string Brief(CommandResult result)
+        {
+            string text = ((result.Error ?? string.Empty) + " " + (result.Output ?? string.Empty)).Replace("\r", " ").Replace("\n", " ").Trim();
+            if (text.Length > 180) text = text.Substring(0, 180);
+            return text;
         }
 
         private static string FindAdb()
@@ -115,6 +178,18 @@ namespace AdbDeviceVitals.Services
         {
             return "\"" + value.Replace("\"", "\\\"") + "\"";
         }
+    }
+
+    public sealed class DeviceListResult
+    {
+        public DeviceListResult(CommandResult command, IList<AdbDevice> devices)
+        {
+            Command = command;
+            Devices = devices ?? new List<AdbDevice>();
+        }
+
+        public CommandResult Command { get; private set; }
+        public IList<AdbDevice> Devices { get; private set; }
     }
 
     public sealed class AdbDevice
