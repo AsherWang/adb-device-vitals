@@ -27,7 +27,7 @@ internal static class ParserTests
         Equal(100, value.BatteryLevel, "battery level");
         Equal(35.0, value.BatteryTemperatureC, "battery temperature");
         Equal(4.383, value.BatteryVoltageV, "battery voltage");
-        Equal("Charging", value.BatteryStatus, "battery status");
+        Equal("充电中", value.BatteryStatus, "battery status");
         Equal(true, value.UsbPowered, "USB power");
     }
 

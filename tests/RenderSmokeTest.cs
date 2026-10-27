@@ -32,8 +32,8 @@ internal static class RenderSmokeTest
             sample.BatteryTemperatureC = 35.0;
             sample.BatteryVoltageV = 4.392;
             sample.LearnedCapacityMah = 4272;
-            sample.BatteryStatus = "Charging";
-            sample.BatteryHealth = "Good";
+            sample.BatteryStatus = "充电中";
+            sample.BatteryHealth = "良好";
             sample.UsbPowered = true;
             sample.ThermalStatus = 0;
             sample.OperatorName = "中国广电";

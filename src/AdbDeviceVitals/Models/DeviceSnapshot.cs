@@ -47,8 +47,8 @@ namespace AdbDeviceVitals.Models
             DeviceSerial = string.Empty;
             DeviceModel = string.Empty;
             Error = string.Empty;
-            BatteryStatus = "Unknown";
-            BatteryHealth = "Unknown";
+            BatteryStatus = "未知";
+            BatteryHealth = "未知";
             OperatorName = string.Empty;
             NetworkType = string.Empty;
             HotspotBand = string.Empty;
@@ -60,6 +60,7 @@ namespace AdbDeviceVitals.Models
             return (DeviceSnapshot)MemberwiseClone();
         }
 
+        /// <summary>CSV 里使用的稳定取值，界面显示请用 MainForm 的中文映射。</summary>
         public string PowerSource
         {
             get

@@ -272,7 +272,7 @@ namespace AdbDeviceVitals
             SetCard("network", SafeText(s.NetworkType, "未知网络"), SafeText(s.OperatorName, "未知运营商") + "  ·  " + FormatSignal(s));
             SetCard("hotspot", TetheringTitle(s), TetheringDetail(s));
             SyncUsbSwitch(true, s.UsbTetheringActive);
-            SetCard("battery", s.BatteryLevel.HasValue ? s.BatteryLevel.Value + "%" : "—", s.BatteryStatus + "  ·  " + s.PowerSource + "  ·  " + Voltage(s.BatteryVoltageV));
+            SetCard("battery", s.BatteryLevel.HasValue ? s.BatteryLevel.Value + "%" : "—", s.BatteryStatus + "  ·  " + PowerSourceName(s) + "  ·  " + Voltage(s.BatteryVoltageV));
             SetCard("thermal", Temperature(s.BatteryTemperatureC), "系统热状态：" + ThermalName(s.ThermalStatus));
             SetCard("traffic", "↓ " + s.DownloadMbps.ToString("0.00", CultureInfo.InvariantCulture) + " Mbps", "↑ " + s.UploadMbps.ToString("0.00", CultureInfo.InvariantCulture) + " Mbps  ·  " + SafeText(s.UpstreamInterface, "自动接口"));
             string capacity = s.LearnedCapacityMah.HasValue ? s.LearnedCapacityMah.Value.ToString("0", CultureInfo.InvariantCulture) + " mAh 学习容量" : "容量数据不可用";
@@ -574,6 +574,14 @@ namespace AdbDeviceVitals
                 details.Add(value.ConnectedClients + " 台设备");
             }
             return string.Join("  ·  ", details.ToArray());
+        }
+
+        private static string PowerSourceName(DeviceSnapshot value)
+        {
+            if (value.UsbPowered) return "USB 供电";
+            if (value.AcPowered) return "交流电充电";
+            if (value.WirelessPowered) return "无线充电";
+            return "电池供电";
         }
 
         private static string Temperature(double? value) { return value.HasValue ? value.Value.ToString("0.0") + " °C" : "—"; }

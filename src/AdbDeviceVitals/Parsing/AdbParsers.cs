@@ -189,21 +189,21 @@ namespace AdbDeviceVitals.Parsing
 
         private static string BatteryStatusName(int value)
         {
-            if (value == 2) return "Charging";
-            if (value == 3) return "Discharging";
-            if (value == 4) return "Not charging";
-            if (value == 5) return "Full";
-            return "Unknown";
+            if (value == 2) return "充电中";
+            if (value == 3) return "放电中";
+            if (value == 4) return "未充电";
+            if (value == 5) return "已充满";
+            return "未知";
         }
 
         private static string BatteryHealthName(int value)
         {
-            if (value == 2) return "Good";
-            if (value == 3) return "Overheat";
-            if (value == 4) return "Dead";
-            if (value == 5) return "Over voltage";
-            if (value == 7) return "Cold";
-            return "Unknown";
+            if (value == 2) return "良好";
+            if (value == 3) return "过热";
+            if (value == 4) return "损坏";
+            if (value == 5) return "过压";
+            if (value == 7) return "过冷";
+            return "未知";
         }
     }
 
