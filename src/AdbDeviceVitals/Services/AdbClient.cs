@@ -9,9 +9,13 @@ using System.Threading.Tasks;
 
 namespace AdbDeviceVitals.Services
 {
+    /// <summary>
+    /// 每次调用都会启动独立的 adb 进程，adb server 本身支持并发客户端，
+    /// 因此这里不再对命令本身加锁，只有 daemon 恢复的流程需要串行。
+    /// </summary>
     public sealed class AdbClient
     {
-        private readonly object _gate = new object();
+        private readonly object _recoveryGate = new object();
         public string AdbPath { get; private set; }
 
         public AdbClient()
@@ -73,10 +77,15 @@ namespace AdbDeviceVitals.Services
 
         private CommandResult RunWithRecovery(string arguments, int timeoutMs)
         {
-            lock (_gate)
+            CommandResult result = Execute(arguments, timeoutMs);
+            if (IsStartServer(arguments) || !IsDaemonFault(result)) return result;
+
+            // 采集是并发的，故障时可能多个线程同时撞进来。只让先进锁的线程负责重启 daemon，
+            // 其余线程在锁内重试一次即可，避免重复拉起 server。
+            lock (_recoveryGate)
             {
-                CommandResult result = Execute(arguments, timeoutMs);
-                if (IsStartServer(arguments) || !IsDaemonFault(result)) return result;
+                result = Execute(arguments, timeoutMs);
+                if (!IsDaemonFault(result)) return result;
 
                 TetherLog log = new TetherLog();
                 log.Write("daemon fault adb=" + AdbPath + " args=" + arguments + " exit=" + result.ExitCode + " " + Brief(result));
