@@ -60,11 +60,20 @@ internal static class RenderSmokeTest
                 sample.RsrpDbm = -96 + i;
                 update.Invoke(form, new object[] { sample });
             }
+
+            // 电脑热点那一行读的是本机真实状态，渲染时固定成一个已开启的样例，
+            // 这样截图里能看到它的完整形态。
+            MethodInfo applyHotspot = typeof(MainForm).GetMethod("ApplyPcHotspotSnapshot", BindingFlags.Instance | BindingFlags.NonPublic);
+            if (applyHotspot != null)
+                applyHotspot.Invoke(form, new object[] { AdbDeviceVitals.Services.PcHotspotSnapshot.Available(AdbDeviceVitals.Services.PcHotspotState.On, "VITALS-TEST", 2, 8, "以太网 2") });
             Application.DoEvents();
 
-            using (Bitmap bitmap = new Bitmap(form.ClientSize.Width, form.ClientSize.Height))
+            // 直接绘制内容面板：Form 的 DrawToBitmap 会把标题栏也画进去，
+            // 结果整体下移、底部被截掉一截，容易被误判成布局溢出。
+            Control root = form.Controls[0];
+            using (Bitmap bitmap = new Bitmap(root.Width, root.Height))
             {
-                form.DrawToBitmap(bitmap, new Rectangle(Point.Empty, bitmap.Size));
+                root.DrawToBitmap(bitmap, new Rectangle(Point.Empty, bitmap.Size));
                 bitmap.Save(args[0], ImageFormat.Png);
             }
             form.Close();

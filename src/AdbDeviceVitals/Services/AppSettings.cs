@@ -13,6 +13,7 @@ namespace AdbDeviceVitals.Services
         private const string AdbDirectoryValue = "AdbDirectory";
         private const string RunAtStartupValue = "RunAtStartup";
         private const string AutoEnableUsbTetheringValue = "AutoEnableUsbTethering";
+        private const string AutoStartPcHotspotValue = "AutoStartPcHotspot";
         private const string LastUpdateCheckValue = "LastUpdateCheckUtc";
         private const string RunKeyPath = @"Software\Microsoft\Windows\CurrentVersion\Run";
         private const string RunValueName = "AdbDeviceVitals";
@@ -59,6 +60,13 @@ namespace AdbDeviceVitals.Services
         {
             get { return ReadBoolean(AutoEnableUsbTetheringValue); }
             set { WriteBoolean(AutoEnableUsbTetheringValue, value); }
+        }
+
+        /// <summary>启动后自动开启电脑侧 Wi-Fi 热点，把手机网络转发给其他设备。</summary>
+        public static bool AutoStartPcHotspot
+        {
+            get { return ReadBoolean(AutoStartPcHotspotValue); }
+            set { WriteBoolean(AutoStartPcHotspotValue, value); }
         }
 
         public static DateTime? LastUpdateCheckUtc

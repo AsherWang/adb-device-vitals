@@ -12,6 +12,7 @@ namespace AdbDeviceVitals
         private readonly TextBox _adbDirectory;
         private readonly CheckBox _runAtStartup;
         private readonly CheckBox _autoEnableUsbTethering;
+        private readonly CheckBox _autoStartPcHotspot;
         private readonly Func<IWin32Window, Task> _checkForUpdates;
 
         public SettingsForm(string detectedAdbPath, Func<IWin32Window, Task> checkForUpdates)
@@ -24,7 +25,7 @@ namespace AdbDeviceVitals
             MaximizeBox = false;
             MinimizeBox = false;
             ShowInTaskbar = false;
-            ClientSize = new Size(560, 330);
+            ClientSize = new Size(560, 360);
             Font = new Font("Segoe UI", 9f);
 
             Label heading = new Label
@@ -74,21 +75,28 @@ namespace AdbDeviceVitals
                 Location = new Point(20, 184),
                 Checked = AppSettings.AutoEnableUsbTethering
             };
+            _autoStartPcHotspot = new CheckBox
+            {
+                Text = "启动后自动开启电脑热点（把手机网络分享给其他设备）",
+                AutoSize = true,
+                Location = new Point(20, 212),
+                Checked = AppSettings.AutoStartPcHotspot
+            };
 
             Label version = new Label
             {
                 Text = "当前版本 " + UpdateChecker.CurrentVersionText,
                 AutoSize = true,
                 ForeColor = Color.DimGray,
-                Location = new Point(20, 220)
+                Location = new Point(20, 250)
             };
-            Button checkUpdates = new Button { Text = "检查更新", Location = new Point(148, 214), Size = new Size(96, 30) };
+            Button checkUpdates = new Button { Text = "检查更新", Location = new Point(148, 244), Size = new Size(96, 30) };
             checkUpdates.Click += async delegate { await CheckForUpdates(checkUpdates); };
 
-            Button clear = new Button { Text = "恢复自动查找", Location = new Point(20, 280), Size = new Size(112, 30) };
+            Button clear = new Button { Text = "恢复自动查找", Location = new Point(20, 310), Size = new Size(112, 30) };
             clear.Click += delegate { _adbDirectory.Text = string.Empty; };
-            Button cancel = new Button { Text = "取消", DialogResult = DialogResult.Cancel, Location = new Point(358, 280), Size = new Size(86, 30) };
-            Button save = new Button { Text = "保存", Location = new Point(454, 280), Size = new Size(86, 30) };
+            Button cancel = new Button { Text = "取消", DialogResult = DialogResult.Cancel, Location = new Point(358, 310), Size = new Size(86, 30) };
+            Button save = new Button { Text = "保存", Location = new Point(454, 310), Size = new Size(86, 30) };
             save.Click += SaveSettings;
 
             Controls.Add(heading);
@@ -98,6 +106,7 @@ namespace AdbDeviceVitals
             Controls.Add(current);
             Controls.Add(_runAtStartup);
             Controls.Add(_autoEnableUsbTethering);
+            Controls.Add(_autoStartPcHotspot);
             Controls.Add(version);
             Controls.Add(checkUpdates);
             Controls.Add(clear);
@@ -149,6 +158,7 @@ namespace AdbDeviceVitals
             {
                 AppSettings.AdbDirectory = directory;
                 AppSettings.AutoEnableUsbTethering = _autoEnableUsbTethering.Checked;
+                AppSettings.AutoStartPcHotspot = _autoStartPcHotspot.Checked;
                 AppSettings.RunAtStartup = _runAtStartup.Checked;
                 DialogResult = DialogResult.OK;
                 Close();

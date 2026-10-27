@@ -40,6 +40,16 @@ namespace AdbDeviceVitals
         private bool _offlineNotified;
         private bool _backgroundStarted;
         private bool _usbTetherRunning;
+        private CheckBox _pcHotspotSwitch;
+        private Label _pcHotspotState;
+        private Label _pcHotspotDetail;
+        private bool _suppressPcHotspotSwitch;
+        private bool _pcHotspotBusy;
+        private bool _pcHotspotRunning;
+        private bool _pcHotspotStatusBusy;
+        private bool _pcHotspotChainPending;
+        private System.Threading.CancellationTokenSource _pcHotspotCancellation;
+        private DateTime _lastPcHotspotPoll = DateTime.MinValue;
         private bool _applyingStartupVisibility;
         private bool _updateCheckRunning;
         private bool _exitingForUpdate;
@@ -126,7 +136,9 @@ namespace AdbDeviceVitals
             _timer.Start();
             if (_activationEvent != null) _activationTimer.Start();
             await RefreshSnapshot(true);
+            _pcHotspotChainPending = true;
             StartUsbTethering();
+            RefreshPcHotspotStatus(true);
             await CheckForUpdates(this, false);
         }
 
@@ -135,11 +147,12 @@ namespace AdbDeviceVitals
             TableLayoutPanel root = new TableLayoutPanel();
             root.Dock = DockStyle.Fill;
             root.Padding = new Padding(20);
-            root.RowCount = 4;
+            root.RowCount = 5;
             root.ColumnCount = 1;
             root.RowStyles.Add(new RowStyle(SizeType.Absolute, 68));
             root.RowStyles.Add(new RowStyle(SizeType.Percent, 62));
             root.RowStyles.Add(new RowStyle(SizeType.Percent, 38));
+            root.RowStyles.Add(new RowStyle(SizeType.Absolute, 48));
             root.RowStyles.Add(new RowStyle(SizeType.Absolute, 28));
             Controls.Add(root);
 
@@ -173,6 +186,8 @@ namespace AdbDeviceVitals
             _chart.Margin = new Padding(4, 10, 4, 4);
             root.Controls.Add(_chart, 0, 2);
 
+            AddPcHotspotBar(root);
+
             Panel footer = new Panel { Dock = DockStyle.Fill };
             _updated = new Label { Text = "尚未采集", AutoSize = true, ForeColor = _muted, Location = new Point(0, 7) };
             _tetherStatus = new Label
@@ -188,7 +203,62 @@ namespace AdbDeviceVitals
             footer.Resize += delegate { _tetherStatus.Width = Math.Max(80, footer.Width - _tetherStatus.Left); };
             footer.Controls.Add(_updated);
             footer.Controls.Add(_tetherStatus);
-            root.Controls.Add(footer, 0, 3);
+            root.Controls.Add(footer, 0, 4);
+        }
+
+        /// <summary>
+        /// 电脑侧热点单独占一行。上面那张「网络共享」卡片读的是手机侧状态（dumpsys wifi），
+        /// 两者不是一回事，混在一起以后自己都会看错。
+        /// </summary>
+        private void AddPcHotspotBar(TableLayoutPanel root)
+        {
+            Panel bar = new Panel { Dock = DockStyle.Fill, BackColor = _card, Margin = new Padding(4, 12, 4, 0) };
+            Label heading = new Label
+            {
+                Text = "电脑热点",
+                AutoSize = true,
+                ForeColor = _muted,
+                Font = new Font("Segoe UI Semibold", 8.5f),
+                Location = new Point(15, 17)
+            };
+            _pcHotspotState = new Label
+            {
+                Text = "—",
+                AutoSize = true,
+                ForeColor = Color.White,
+                Font = new Font("Segoe UI Semibold", 12f),
+                Location = new Point(84, 11)
+            };
+            _pcHotspotDetail = new Label
+            {
+                Text = "读取中…",
+                AutoSize = false,
+                AutoEllipsis = true,
+                ForeColor = _muted,
+                Location = new Point(162, 15),
+                Height = 20,
+                Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right
+            };
+            _pcHotspotSwitch = new CheckBox
+            {
+                Text = "开启热点",
+                AutoSize = true,
+                ForeColor = Color.White,
+                BackColor = _card,
+                Anchor = AnchorStyles.Top | AnchorStyles.Right,
+                Enabled = false
+            };
+            bar.Controls.Add(heading);
+            bar.Controls.Add(_pcHotspotState);
+            bar.Controls.Add(_pcHotspotDetail);
+            bar.Controls.Add(_pcHotspotSwitch);
+            bar.Resize += delegate
+            {
+                _pcHotspotSwitch.Location = new Point(Math.Max(120, bar.Width - _pcHotspotSwitch.Width - 12), 14);
+                _pcHotspotDetail.Width = Math.Max(80, _pcHotspotSwitch.Left - _pcHotspotDetail.Left - 12);
+            };
+            _pcHotspotSwitch.CheckedChanged += async delegate { await OnPcHotspotSwitchChanged(); };
+            root.Controls.Add(bar, 0, 3);
         }
 
         private async Task OpenSettings()
@@ -201,6 +271,7 @@ namespace AdbDeviceVitals
             if (_exitingForUpdate || IsDisposed) return;
             _adb.ReloadPath();
             StartUsbTethering();
+            if (AppSettings.AutoStartPcHotspot) StartPcHotspot();
             await RefreshSnapshot(true);
         }
 
@@ -245,6 +316,7 @@ namespace AdbDeviceVitals
                     _lastLog = DateTime.Now;
                 }
                 CheckAlerts(snapshot);
+                RefreshPcHotspotStatus(false);
             }
             catch (Exception ex)
             {
@@ -333,6 +405,7 @@ namespace AdbDeviceVitals
             if (!AppSettings.AutoEnableUsbTethering)
             {
                 ShowTetherStatus(string.Empty, _muted);
+                StartPcHotspotIfPending();
                 return;
             }
 
@@ -371,6 +444,7 @@ namespace AdbDeviceVitals
                 Notify("USB 网络共享", result.Message, ToolTipIcon.Warning);
             else if (result.Changed)
                 Notify("USB 网络共享", result.Message, ToolTipIcon.Info);
+            StartPcHotspotIfPending();
         }
 
         private void SyncUsbSwitch(bool connected, bool active)
@@ -419,6 +493,196 @@ namespace AdbDeviceVitals
             _usbTetherRunning = false;
             System.Threading.CancellationTokenSource source = _tetherCancellation;
             _tetherCancellation = null;
+            if (source == null) return;
+            try { source.Cancel(); } catch (ObjectDisposedException) { }
+        }
+
+        /// <summary>开机链路上只在 USB 共享这一步落定后触发一次自动开热点。</summary>
+        private void StartPcHotspotIfPending()
+        {
+            if (!_pcHotspotChainPending) return;
+            _pcHotspotChainPending = false;
+            StartPcHotspot();
+        }
+
+        private void StartPcHotspot()
+        {
+            if (!AppSettings.AutoStartPcHotspot)
+            {
+                RefreshPcHotspotStatus(true);
+                return;
+            }
+            if (_pcHotspotRunning) return;
+
+            CancelPcHotspot();
+            System.Threading.CancellationTokenSource source = new System.Threading.CancellationTokenSource();
+            _pcHotspotCancellation = source;
+            _pcHotspotRunning = true;
+            ShowPcHotspotStatus("等待手机网络就绪…", _muted);
+
+            PcHotspotService service = new PcHotspotService();
+            Task<PcHotspotResult> task = Task.Factory.StartNew(
+                delegate { return service.EnsureAsync(source.Token); },
+                System.Threading.CancellationToken.None,
+                TaskCreationOptions.LongRunning,
+                TaskScheduler.Default).Unwrap();
+
+            task.ContinueWith(delegate(Task<PcHotspotResult> completed)
+            {
+                if (source.IsCancellationRequested || !object.ReferenceEquals(_pcHotspotCancellation, source)) return;
+                PcHotspotResult result = completed.IsFaulted
+                    ? PcHotspotResult.Failed(PcHotspotService.ExceptionMessage(completed.Exception))
+                    : completed.Result;
+                if (IsDisposed || !IsHandleCreated) return;
+                try
+                {
+                    BeginInvoke(new MethodInvoker(delegate
+                    {
+                        if (IsDisposed || !object.ReferenceEquals(_pcHotspotCancellation, source)) return;
+                        ShowPcHotspotResult(result);
+                    }));
+                }
+                catch (InvalidOperationException)
+                {
+                }
+            }, System.Threading.CancellationToken.None, TaskContinuationOptions.None, TaskScheduler.Default);
+        }
+
+        private void ShowPcHotspotResult(PcHotspotResult result)
+        {
+            _pcHotspotRunning = false;
+            if (result.Completed)
+            {
+                ShowPcHotspotStatus(result.Message, result.Succeeded ? _green : Color.FromArgb(255, 174, 66));
+                if (!result.Succeeded) Notify("电脑热点", result.Message, ToolTipIcon.Warning);
+                else if (result.Changed) Notify("电脑热点", result.Message, ToolTipIcon.Info);
+            }
+            RefreshPcHotspotStatus(true);
+        }
+
+        private void RefreshPcHotspotStatus(bool force)
+        {
+            if (_pcHotspotSwitch == null || _pcHotspotStatusBusy) return;
+            if (!force && DateTime.UtcNow - _lastPcHotspotPoll < TimeSpan.FromSeconds(5)) return;
+            _lastPcHotspotPoll = DateTime.UtcNow;
+            _pcHotspotStatusBusy = true;
+
+            PcHotspotService service = new PcHotspotService();
+            Task.Factory.StartNew(delegate { return service.Read(); })
+                .ContinueWith(delegate(Task<PcHotspotSnapshot> completed)
+                {
+                    _pcHotspotStatusBusy = false;
+                    PcHotspotSnapshot snapshot = completed.IsFaulted
+                        ? PcHotspotSnapshot.Unavailable(PcHotspotService.ExceptionMessage(completed.Exception))
+                        : completed.Result;
+                    if (IsDisposed || !IsHandleCreated) return;
+                    try
+                    {
+                        BeginInvoke(new MethodInvoker(delegate
+                        {
+                            if (!IsDisposed) ApplyPcHotspotSnapshot(snapshot);
+                        }));
+                    }
+                    catch (InvalidOperationException)
+                    {
+                    }
+                }, TaskScheduler.Default);
+        }
+
+        private void ApplyPcHotspotSnapshot(PcHotspotSnapshot snapshot)
+        {
+            if (_pcHotspotSwitch == null) return;
+            if (!snapshot.Supported)
+            {
+                _pcHotspotState.Text = "不可用";
+                _pcHotspotState.ForeColor = Color.FromArgb(255, 174, 66);
+                SetPcHotspotDetail(snapshot.Error, _muted);
+                SyncPcHotspotSwitch(false, false);
+                return;
+            }
+
+            bool on = snapshot.State == PcHotspotState.On;
+            if (on)
+            {
+                _pcHotspotState.Text = "已开启";
+                _pcHotspotState.ForeColor = _green;
+            }
+            else if (snapshot.State == PcHotspotState.Off)
+            {
+                _pcHotspotState.Text = "未开启";
+                _pcHotspotState.ForeColor = Color.White;
+            }
+            else if (snapshot.State == PcHotspotState.Transitioning)
+            {
+                _pcHotspotState.Text = "切换中";
+                _pcHotspotState.ForeColor = Color.FromArgb(255, 174, 66);
+            }
+            else
+            {
+                _pcHotspotState.Text = "状态未知";
+                _pcHotspotState.ForeColor = _muted;
+            }
+
+            List<string> parts = new List<string>();
+            if (!string.IsNullOrEmpty(snapshot.Ssid)) parts.Add(snapshot.Ssid);
+            if (on) parts.Add(snapshot.ClientCount + "/" + snapshot.MaxClientCount + " 台设备");
+            if (!string.IsNullOrEmpty(snapshot.UpstreamName)) parts.Add("上游 " + snapshot.UpstreamName);
+            if (parts.Count == 0) parts.Add(on ? "已共享手机网络" : "未共享");
+            SetPcHotspotDetail(string.Join("  ·  ", parts.ToArray()), _muted);
+            SyncPcHotspotSwitch(true, on);
+        }
+
+        private void SetPcHotspotDetail(string text, Color color)
+        {
+            _pcHotspotDetail.Text = text;
+            _pcHotspotDetail.ForeColor = color;
+        }
+
+        private void ShowPcHotspotStatus(string message, Color color)
+        {
+            if (_pcHotspotDetail == null) return;
+            SetPcHotspotDetail(message, color);
+        }
+
+        private void SyncPcHotspotSwitch(bool supported, bool on)
+        {
+            if (_pcHotspotSwitch == null) return;
+            _suppressPcHotspotSwitch = true;
+            _pcHotspotSwitch.Enabled = supported && !_pcHotspotBusy;
+            _pcHotspotSwitch.Checked = supported && on;
+            _suppressPcHotspotSwitch = false;
+        }
+
+        private async Task OnPcHotspotSwitchChanged()
+        {
+            if (_suppressPcHotspotSwitch || _pcHotspotSwitch == null) return;
+            bool enable = _pcHotspotSwitch.Checked;
+            _pcHotspotBusy = true;
+            _pcHotspotSwitch.Enabled = false;
+            CancelPcHotspot();
+            ShowPcHotspotStatus(enable ? "正在开启电脑热点…" : "正在关闭电脑热点…", _muted);
+            try
+            {
+                PcHotspotService service = new PcHotspotService();
+                PcHotspotResult result = await Task.Run(delegate { return service.SetEnabled(enable); });
+                if (!IsDisposed) ShowPcHotspotResult(result);
+            }
+            catch (Exception ex)
+            {
+                if (!IsDisposed) ShowPcHotspotStatus(ex.Message, Color.FromArgb(255, 174, 66));
+            }
+            finally
+            {
+                _pcHotspotBusy = false;
+                RefreshPcHotspotStatus(true);
+            }
+        }
+
+        private void CancelPcHotspot()
+        {
+            _pcHotspotRunning = false;
+            System.Threading.CancellationTokenSource source = _pcHotspotCancellation;
+            _pcHotspotCancellation = null;
             if (source == null) return;
             try { source.Cancel(); } catch (ObjectDisposedException) { }
         }
@@ -521,6 +785,7 @@ namespace AdbDeviceVitals
                 return;
             }
             CancelUsbTethering();
+            CancelPcHotspot();
             _tray.Visible = false;
             _tray.Dispose();
         }
@@ -530,6 +795,7 @@ namespace AdbDeviceVitals
             if (disposing)
             {
                 CancelUsbTethering();
+                CancelPcHotspot();
                 if (_timer != null) _timer.Dispose();
                 if (_activationTimer != null) _activationTimer.Dispose();
                 if (_chart != null) _chart.Dispose();
