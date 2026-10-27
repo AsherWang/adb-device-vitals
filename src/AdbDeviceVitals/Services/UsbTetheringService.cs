@@ -60,6 +60,11 @@ namespace AdbDeviceVitals.Services
         private static readonly TimeSpan ConfirmWindow = TimeSpan.FromSeconds(90);
         private static readonly TimeSpan ConfirmInterval = TimeSpan.FromMilliseconds(400);
         private static readonly TimeSpan UnchangedFunctionLimit = TimeSpan.FromSeconds(12);
+        // 开启共享只切换 rndis，不显式带上 adb（计划文档原本写的是 "rndis,adb"）。
+        // 实测小米机型会自动把 adb 并回组合（sys.usb.state 变为 rndis,adb），调试连接不中断，
+        // 因此这里不需要显式保留；而严格按 AOSP 语义实现的系统可能只保留 rndis，
+        // 届时切完 ADB 会掉线，本程序既无法确认结果，也无法再用 setFunctions 关闭共享。
+        // 已验证机型没有出现该问题，故保持现状。若将来遇到切换后 ADB 断连，改回 "svc usb setFunctions rndis,adb"。
         private const string EnableFunctionCommand = "svc usb setFunctions rndis";
         private const string DisableFunctionCommand = "svc usb setFunctions mtp";
         private const string FunctionStateCommand = "getprop sys.usb.state";

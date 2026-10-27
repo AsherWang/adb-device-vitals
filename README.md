@@ -69,6 +69,16 @@ Android 厂商和系统版本可能隐藏部分字段。应用会按可用程度
 - 蜂窝信号优先读取 5G NR，未提供时回退到 LTE。
 - 瞬时充电电流和循环次数在部分 MIUI 设备上受系统权限限制。
 
+### USB 功能组合
+
+开启 USB 网络共享时，程序执行 `svc usb setFunctions rndis`，只切换 RNDIS，不显式携带 adb。这与早期计划中的 `rndis,adb` 不同，属于有意保持的现状：
+
+- Android 的 `setCurrentFunctions` 是"替换整个组合"语义，不带 adb 就可能把调试通道摘掉。小米等 ROM 会自动把 adb 并回组合（`sys.usb.state` 显示为 `rndis,adb`），USB 调试不受影响；本项目验证的机型属于这种情况。
+- 严格按 AOSP 语义实现的系统如果只保留 `rndis`，切换后 ADB 会掉线。此时程序读不到设备，会把成功的切换报成失败，也无法再通过界面关闭共享，需要到手机上操作。
+- 在已验证机型上改回 `rndis,adb` 没有任何收益，反而多一条可能失败的命令，因此维持 `rndis`。若在其他机型遇到切换后 ADB 断连，再改为 `rndis,adb`。
+
+另外，`setFunctions` 只改运行时组合，不写入 `persist.sys.usb.config`。拔插数据线或重启手机后，USB 功能会回到系统持久化的组合（通常只含 adb 或 `mtp,adb`），USB 网络共享不会自动恢复，需要重新开启。
+
 ## License
 
 MIT
