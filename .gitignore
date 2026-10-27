@@ -6,3 +6,6 @@
 *.log
 artifacts/
 
+# WorkBuddy 工作区笔记，仅本地
+.workbuddy/
+
