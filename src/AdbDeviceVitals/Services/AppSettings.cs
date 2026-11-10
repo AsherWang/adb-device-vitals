@@ -14,6 +14,7 @@ namespace AdbDeviceVitals.Services
         private const string RunAtStartupValue = "RunAtStartup";
         private const string AutoEnableUsbTetheringValue = "AutoEnableUsbTethering";
         private const string AutoStartPcHotspotValue = "AutoStartPcHotspot";
+        private const string TargetDeviceSerialValue = "TargetDeviceSerial";
         private const string LastUpdateCheckValue = "LastUpdateCheckUtc";
         private const string RunKeyPath = @"Software\Microsoft\Windows\CurrentVersion\Run";
         private const string RunValueName = "AdbDeviceVitals";
@@ -67,6 +68,40 @@ namespace AdbDeviceVitals.Services
         {
             get { return ReadBoolean(AutoStartPcHotspotValue); }
             set { WriteBoolean(AutoStartPcHotspotValue, value); }
+        }
+
+        /// <summary>
+        /// 锁定的设备序列号。留空表示自动模式：只接一台时直接用它，多台时要求用户先选。
+        /// 监控采集与 USB 网络共享都以这个值为准，避免多设备时切错手机。
+        /// </summary>
+        public static string TargetDeviceSerial
+        {
+            get
+            {
+                try
+                {
+                    using (RegistryKey key = Registry.CurrentUser.OpenSubKey(RegistryPath, false))
+                    {
+                        if (key == null) return string.Empty;
+                        string value = Convert.ToString(key.GetValue(TargetDeviceSerialValue, string.Empty)).Trim();
+                        return DeviceSelection.IsValidSerial(value) ? value : string.Empty;
+                    }
+                }
+                catch
+                {
+                    return string.Empty;
+                }
+            }
+            set
+            {
+                using (RegistryKey key = Registry.CurrentUser.CreateSubKey(RegistryPath))
+                {
+                    if (string.IsNullOrWhiteSpace(value))
+                        key.DeleteValue(TargetDeviceSerialValue, false);
+                    else
+                        key.SetValue(TargetDeviceSerialValue, value.Trim(), RegistryValueKind.String);
+                }
+            }
         }
 
         public static DateTime? LastUpdateCheckUtc

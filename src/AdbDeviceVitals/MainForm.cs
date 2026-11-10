@@ -38,6 +38,7 @@ namespace AdbDeviceVitals
         private bool _polling;
         private bool _allowExit;
         private bool _offlineNotified;
+        private bool _needsDeviceChoice;
         private bool _backgroundStarted;
         private bool _usbTetherRunning;
         private CheckBox _pcHotspotSwitch;
@@ -159,6 +160,7 @@ namespace AdbDeviceVitals
             Panel header = new Panel { Dock = DockStyle.Fill };
             Label title = new Label { Text = "ADB DEVICE VITALS", AutoSize = true, Font = new Font("Segoe UI Semibold", 18f), Location = new Point(0, 15) };
             _connection = new Label { Text = "正在连接…", AutoSize = true, ForeColor = _muted, Anchor = AnchorStyles.Top | AnchorStyles.Right, TextAlign = ContentAlignment.MiddleRight };
+            _connection.Click += async delegate { if (_needsDeviceChoice) await OpenSettings(); };
             Label settings = new Label { Text = "\uE713", Width = 38, Height = 34, AutoSize = false, TextAlign = ContentAlignment.MiddleCenter, ForeColor = Color.White, BackColor = _background, Anchor = AnchorStyles.Top | AnchorStyles.Right, Font = new Font("Segoe MDL2 Assets", 12f), AccessibleName = "设置", AccessibleRole = AccessibleRole.PushButton, Cursor = Cursors.Hand };
             settings.MouseEnter += delegate { settings.ForeColor = _green; };
             settings.MouseLeave += delegate { settings.ForeColor = Color.White; };
@@ -263,7 +265,7 @@ namespace AdbDeviceVitals
 
         private async Task OpenSettings()
         {
-            using (SettingsForm dialog = new SettingsForm(_adb.AdbPath, delegate(IWin32Window owner) { return CheckForUpdates(owner, true); }))
+            using (SettingsForm dialog = new SettingsForm(_adb, delegate(IWin32Window owner) { return CheckForUpdates(owner, true); }))
             {
                 if (dialog.ShowDialog(this) != DialogResult.OK || _exitingForUpdate) return;
             }
@@ -330,11 +332,17 @@ namespace AdbDeviceVitals
         private void UpdateUi(DeviceSnapshot s)
         {
             _updated.Text = "更新于 " + s.Timestamp.ToString("HH:mm:ss");
+            _needsDeviceChoice = s.NeedsDeviceSelection;
+            _connection.Cursor = _needsDeviceChoice ? Cursors.Hand : Cursors.Default;
             if (!s.Connected)
             {
-                _connection.Text = s.Error;
+                // 顶部空间有限，只放短提示并标明可点击；完整原因在托盘气泡里。
+                _connection.Text = s.NeedsDeviceSelection
+                    ? (s.PreferredSerialMissing ? "预设设备未连接 · 点此重新选择" : "检测到多台设备 · 点此指定")
+                    : s.Error;
                 _connection.ForeColor = Color.FromArgb(255, 174, 66);
-                SetCard("device", "未连接", "请检查 USB 调试和设备授权");
+                SetCard("device", "未连接",
+                    s.NeedsDeviceSelection ? "请在设置中指定用于网络共享的设备" : "请检查 USB 调试和设备授权");
                 SyncUsbSwitch(false, false);
                 return;
             }
@@ -357,7 +365,7 @@ namespace AdbDeviceVitals
             if (!s.Connected)
             {
                 if (_usbTetherRunning || _offlineNotified) return;
-                Notify("设备已断开", s.Error, ToolTipIcon.Warning);
+                Notify(s.NeedsDeviceSelection ? "需要选择设备" : "设备已断开", s.Error, ToolTipIcon.Warning);
                 _offlineNotified = true;
                 return;
             }

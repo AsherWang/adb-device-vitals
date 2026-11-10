@@ -137,12 +137,13 @@ namespace AdbDeviceVitals.Services
                 else
                 {
                     IList<AdbDevice> devices = await ListLoggedAsync(log).ConfigureAwait(false);
-                    AdbDevice device = FirstAuthorized(devices);
+                    DeviceSelection selection = DeviceSelection.Resolve(devices, AppSettings.TargetDeviceSerial);
+                    AdbDevice device = selection.Device;
                     if (device == null)
                     {
-                        pendingReason = HasUnauthorized(devices)
-                            ? "设备未授权 USB 调试。"
-                            : "未找到已授权的 Android 设备。";
+                        // 目标设备还没出现时继续等，绝不顺手拿列表里的其它手机开刀。
+                        // 预设设备已被换掉的情况也会一直等到 discovery 窗口结束再报提示。
+                        pendingReason = selection.Message;
                         log.Write(pendingReason);
                     }
                     else
@@ -170,13 +171,9 @@ namespace AdbDeviceVitals.Services
         {
             if (!_adb.IsAvailable) return UsbTetherResult.Failed("找不到 adb.exe。");
             IList<AdbDevice> devices = await ListLoggedAsync(log).ConfigureAwait(false);
-            AdbDevice device = FirstAuthorized(devices);
-            if (device == null)
-            {
-                return UsbTetherResult.Failed(HasUnauthorized(devices)
-                    ? "设备未授权 USB 调试。"
-                    : "未找到已授权的 Android 设备。");
-            }
+            DeviceSelection selection = DeviceSelection.Resolve(devices, AppSettings.TargetDeviceSerial);
+            AdbDevice device = selection.Device;
+            if (device == null) return UsbTetherResult.Failed(selection.Message);
 
             log.Write("device " + device.Serial + " " + device.Model);
             ProbeSnapshot probe = await ProbeAsync(device.Serial, log).ConfigureAwait(false);
@@ -289,24 +286,6 @@ namespace AdbDeviceVitals.Services
                 string token = part.Trim();
                 if (token.Equals("rndis", StringComparison.OrdinalIgnoreCase) || token.Equals("ncm", StringComparison.OrdinalIgnoreCase))
                     return true;
-            }
-            return false;
-        }
-
-        private static AdbDevice FirstAuthorized(IList<AdbDevice> devices)
-        {
-            foreach (AdbDevice device in devices)
-            {
-                if (string.Equals(device.State, "device", StringComparison.OrdinalIgnoreCase)) return device;
-            }
-            return null;
-        }
-
-        private static bool HasUnauthorized(IList<AdbDevice> devices)
-        {
-            foreach (AdbDevice device in devices)
-            {
-                if (string.Equals(device.State, "unauthorized", StringComparison.OrdinalIgnoreCase)) return true;
             }
             return false;
         }

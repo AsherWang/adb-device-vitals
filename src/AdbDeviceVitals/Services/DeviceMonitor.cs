@@ -37,6 +37,8 @@ namespace AdbDeviceVitals.Services
             DeviceSnapshot snapshot = _last.Copy();
             snapshot.Timestamp = DateTime.Now;
             snapshot.Error = string.Empty;
+            snapshot.NeedsDeviceSelection = false;
+            snapshot.PreferredSerialMissing = false;
 
             if (!_adb.IsAvailable)
             {
@@ -47,16 +49,18 @@ namespace AdbDeviceVitals.Services
             }
 
             IList<AdbDevice> devices = await _adb.ListDevicesAsync().ConfigureAwait(false);
-            AdbDevice device = devices.FirstOrDefault(delegate(AdbDevice item) { return item.State == "device"; });
-            if (device == null)
+            DeviceSelection selection = DeviceSelection.Resolve(devices, AppSettings.TargetDeviceSerial);
+            if (selection.Device == null)
             {
                 snapshot.Connected = false;
-                snapshot.Error = devices.Any(delegate(AdbDevice item) { return item.State == "unauthorized"; })
-                    ? "请在手机上允许这台电脑进行 USB 调试。"
-                    : "未找到已授权的 Android 设备。";
+                snapshot.Error = selection.Message;
+                snapshot.NeedsDeviceSelection = selection.NeedsSelection;
+                snapshot.PreferredSerialMissing = selection.PreferredMissing;
                 _last = snapshot;
                 return snapshot;
             }
+
+            AdbDevice device = selection.Device;
 
             if (!string.Equals(snapshot.DeviceSerial, device.Serial, StringComparison.Ordinal))
             {

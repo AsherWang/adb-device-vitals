@@ -10,6 +10,12 @@ namespace AdbDeviceVitals.Models
         public string DeviceModel { get; set; }
         public string Error { get; set; }
 
+        /// <summary>当前连接状态是因为「需要用户指定设备」而不是设备真的掉线。</summary>
+        public bool NeedsDeviceSelection { get; set; }
+
+        /// <summary>设置里记录的序列号已不在当前设备列表中。</summary>
+        public bool PreferredSerialMissing { get; set; }
+
         public int? BatteryLevel { get; set; }
         public double? BatteryTemperatureC { get; set; }
         public double? BatteryVoltageV { get; set; }
@@ -47,6 +53,8 @@ namespace AdbDeviceVitals.Models
             DeviceSerial = string.Empty;
             DeviceModel = string.Empty;
             Error = string.Empty;
+            NeedsDeviceSelection = false;
+            PreferredSerialMissing = false;
             BatteryStatus = "未知";
             BatteryHealth = "未知";
             OperatorName = string.Empty;
