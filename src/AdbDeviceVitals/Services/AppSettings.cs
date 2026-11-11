@@ -147,11 +147,25 @@ namespace AdbDeviceVitals.Services
             set { Update(delegate(SettingsData data) { data.AutoRecoverUsbTethering = value; }, false, true); }
         }
 
-        /// <summary>启动后监听新短信；关闭时既不读短信也不建立时间基线。</summary>
+        /// <summary>启动后监听新短信；默认关闭，关闭时既不读短信也不建立时间基线。</summary>
         public static bool SmsSyncEnabled
         {
             get { lock (Gate) { return _current.SmsSyncEnabled; } }
             set { Update(delegate(SettingsData data) { data.SmsSyncEnabled = value; }, false, true); }
+        }
+
+        /// <summary>用 Windows 通知中心提醒新短信；系统不支持时自动回退托盘气泡。</summary>
+        public static bool SmsToastEnabled
+        {
+            get { lock (Gate) { return _current.SmsToastEnabled; } }
+            set { Update(delegate(SettingsData data) { data.SmsToastEnabled = value; }, false, true); }
+        }
+
+        /// <summary>只对这些发件人弹提醒；留空表示全部。列表始终保留所有短信。</summary>
+        public static string SmsSenderFilter
+        {
+            get { lock (Gate) { return _current.SmsSenderFilter ?? string.Empty; } }
+            set { Update(delegate(SettingsData data) { data.SmsSenderFilter = (value ?? string.Empty).Trim(); }, false, true); }
         }
 
         /// <summary>启动后自动开启电脑侧 Wi-Fi 热点，把手机网络转发给其他设备。</summary>

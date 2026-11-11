@@ -16,6 +16,8 @@ namespace AdbDeviceVitals
         private readonly CheckBox _autoRecoverUsbTethering;
         private readonly CheckBox _autoStartPcHotspot;
         private readonly CheckBox _smsSyncEnabled;
+        private readonly CheckBox _smsToastEnabled;
+        private readonly TextBox _smsSenderFilter;
         private readonly ComboBox _targetDevice;
         private readonly Label _deviceHint;
         private readonly Button _refreshDevices;
@@ -47,7 +49,7 @@ namespace AdbDeviceVitals
             MaximizeBox = false;
             MinimizeBox = false;
             ShowInTaskbar = false;
-            ClientSize = new Size(560, 496);
+            ClientSize = new Size(560, 538);
             Font = new Font("Segoe UI", 9f);
 
             Label heading = new Label
@@ -138,10 +140,31 @@ namespace AdbDeviceVitals
 
             _smsSyncEnabled = new CheckBox
             {
-                Text = "同步新短信（程序启动后开始监听，不读取历史短信）",
+                Text = "同步新短信（不读历史，默认关闭）",
                 AutoSize = true,
                 Location = new Point(20, 370),
                 Checked = AppSettings.SmsSyncEnabled
+            };
+            _smsToastEnabled = new CheckBox
+            {
+                Text = "用 Windows 通知提醒",
+                AutoSize = true,
+                Location = new Point(278, 370),
+                Checked = AppSettings.SmsToastEnabled
+            };
+            Label filterHint = new Label
+            {
+                Text = "只提醒这些发件人（留空为全部，逗号或空格分隔关键字；列表始终保留所有短信）",
+                AutoSize = true,
+                ForeColor = Color.DimGray,
+                Location = new Point(20, 400)
+            };
+            _smsSenderFilter = new TextBox
+            {
+                Location = new Point(20, 422),
+                Size = new Size(520, 25),
+                MaxLength = 200,
+                Text = AppSettings.SmsSenderFilter
             };
 
             Label version = new Label
@@ -149,15 +172,15 @@ namespace AdbDeviceVitals
                 Text = "当前版本 " + UpdateChecker.CurrentVersionText,
                 AutoSize = true,
                 ForeColor = Color.DimGray,
-                Location = new Point(20, 404)
+                Location = new Point(20, 458)
             };
-            Button checkUpdates = new Button { Text = "检查更新", Location = new Point(148, 398), Size = new Size(96, 30) };
+            Button checkUpdates = new Button { Text = "检查更新", Location = new Point(148, 452), Size = new Size(96, 30) };
             checkUpdates.Click += async delegate { await CheckForUpdates(checkUpdates); };
 
-            Button clear = new Button { Text = "恢复自动查找", Location = new Point(20, 440), Size = new Size(112, 30) };
+            Button clear = new Button { Text = "恢复自动查找", Location = new Point(20, 494), Size = new Size(112, 30) };
             clear.Click += delegate { _adbDirectory.Text = string.Empty; };
-            Button cancel = new Button { Text = "取消", DialogResult = DialogResult.Cancel, Location = new Point(358, 440), Size = new Size(86, 30) };
-            Button save = new Button { Text = "保存", Location = new Point(454, 440), Size = new Size(86, 30) };
+            Button cancel = new Button { Text = "取消", DialogResult = DialogResult.Cancel, Location = new Point(358, 494), Size = new Size(86, 30) };
+            Button save = new Button { Text = "保存", Location = new Point(454, 494), Size = new Size(86, 30) };
             save.Click += SaveSettings;
 
             Controls.Add(heading);
@@ -174,6 +197,9 @@ namespace AdbDeviceVitals
             Controls.Add(_autoRecoverUsbTethering);
             Controls.Add(_autoStartPcHotspot);
             Controls.Add(_smsSyncEnabled);
+            Controls.Add(_smsToastEnabled);
+            Controls.Add(filterHint);
+            Controls.Add(_smsSenderFilter);
             Controls.Add(version);
             Controls.Add(checkUpdates);
             Controls.Add(clear);
@@ -352,7 +378,7 @@ namespace AdbDeviceVitals
 
             try
             {
-                // 一次写入整份配置，避免五个属性各写一遍文件、留下中间状态。
+                // 一次写入整份配置，避免逐个属性各写一遍文件、留下中间状态。
                 AppSettings.Save(new SettingsData
                 {
                     AdbDirectory = directory,
@@ -361,6 +387,8 @@ namespace AdbDeviceVitals
                     AutoRecoverUsbTethering = _autoRecoverUsbTethering.Checked,
                     AutoStartPcHotspot = _autoStartPcHotspot.Checked,
                     SmsSyncEnabled = _smsSyncEnabled.Checked,
+                    SmsToastEnabled = _smsToastEnabled.Checked,
+                    SmsSenderFilter = _smsSenderFilter.Text.Trim(),
                     RunAtStartup = _runAtStartup.Checked,
                     LastUpdateCheckUtc = AppSettings.LastUpdateCheckUtc
                 });

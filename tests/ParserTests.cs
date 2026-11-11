@@ -18,6 +18,7 @@ internal static class ParserTests
         DeviceSelectionTests();
         SettingsFileTests();
         SmsParserTests();
+        SmsEnhancements();
         UsbTetherWatchdogTests();
         Updates();
         Console.WriteLine(_failed == 0 ? "All parser tests passed." : _failed + " parser test(s) failed.");
@@ -182,6 +183,8 @@ internal static class ParserTests
             AutoRecoverUsbTethering = true,
             AutoStartPcHotspot = false,
             SmsSyncEnabled = true,
+            SmsToastEnabled = false,
+            SmsSenderFilter = "10086, 95555",
             LastUpdateCheckUtc = new DateTime(2026, 11, 8, 3, 0, 0, DateTimeKind.Utc)
         };
         string json = SettingsFile.Serialize(original);
@@ -194,6 +197,8 @@ internal static class ParserTests
         Equal(true, parsed.AutoRecoverUsbTethering, "settings auto recover usb tethering");
         Equal(false, parsed.AutoStartPcHotspot, "settings auto hotspot");
         Equal(true, parsed.SmsSyncEnabled, "settings sms sync enabled");
+        Equal(false, parsed.SmsToastEnabled, "settings toast flag");
+        Equal("10086, 95555", parsed.SmsSenderFilter, "settings sender filter");
         Equal(true, json.IndexOf("\"SmsSyncEnabled\": true", StringComparison.Ordinal) >= 0,
             "settings sms flag serialized");
         Equal(true, json.IndexOf("\"AutoRecoverUsbTethering\": true", StringComparison.Ordinal) >= 0,
@@ -208,13 +213,16 @@ internal static class ParserTests
         Equal(string.Empty, empty.AdbDirectory, "empty settings adb directory");
         Equal(false, empty.RunAtStartup, "empty settings startup flag");
         Equal(false, empty.LastUpdateCheckUtc.HasValue, "empty settings timestamp");
+        Equal(false, empty.SmsSyncEnabled, "empty settings sms sync off");
+        Equal(true, empty.SmsToastEnabled, "empty settings toast on");
+        Equal(string.Empty, empty.SmsSenderFilter, "empty settings sender filter");
         Equal(string.Empty, SettingsFile.Parse(string.Empty).TargetDeviceSerial, "null text is safe");
         Equal(true, SettingsFile.Parse("{\"Unknown\": \"x\", \"RunAtStartup\": true}").RunAtStartup,
             "unknown setting ignored");
         Equal(false, SettingsFile.Parse("{\"RunAtStartup\": true}").AutoRecoverUsbTethering,
             "missing recover flag defaults off in old files");
-        Equal(true, SettingsFile.Parse("{\"RunAtStartup\": true}").SmsSyncEnabled,
-            "missing sms flag defaults on in old files");
+        Equal(false, SettingsFile.Parse("{\"RunAtStartup\": true}").SmsSyncEnabled,
+            "missing sms flag defaults off in old files");
         Equal(false, SettingsFile.Parse("{\"SmsSyncEnabled\": false}").SmsSyncEnabled,
             "sms flag can be turned off");
         Equal(true, SettingsFile.Parse("{\"AutoRecoverUsbTethering\": true}").AutoRecoverUsbTethering,
@@ -282,6 +290,50 @@ internal static class ParserTests
 
         Equal("a b c", SmsRowParser.OneLine("a\r\nb   c\n"), "sms one-line preview");
         Equal(DateTime.MinValue, SmsRowParser.ToLocalTime(0), "sms invalid date is safe");
+    }
+
+    private static void SmsEnhancements()
+    {
+        // 默认值：读短信要显式开启，Windows 通知默认尝试但允许回退。
+        SettingsData defaults = new SettingsData();
+        Equal(false, defaults.SmsSyncEnabled, "sms sync defaults off");
+        Equal(true, defaults.SmsToastEnabled, "toast defaults on");
+        Equal(string.Empty, defaults.SmsSenderFilter, "sender filter defaults empty");
+
+        string encoded = SettingsFile.Serialize(new SettingsData
+        {
+            SmsToastEnabled = false,
+            SmsSenderFilter = "a\"b\\c"
+        });
+        SettingsData roundTrip = SettingsFile.Parse(encoded);
+        Equal("a\"b\\c", roundTrip.SmsSenderFilter, "sender filter escaped round trip");
+        Equal(false, roundTrip.SmsToastEnabled, "toast flag parsed");
+
+        // 验证码提取：关键词优先，纯数字只在唯一数字块时认，余额/订单不算。
+        Equal("123456", SmsCodeExtractor.Extract("【XX】您的验证码是 123456，10 分钟内有效。"), "sms code zh");
+        Equal("482913", SmsCodeExtractor.Extract("Your code: 482913. Do not share it."), "sms code en");
+        Equal("654321", SmsCodeExtractor.Extract("654321"), "sms code standalone");
+        Equal(string.Empty, SmsCodeExtractor.Extract("您的订单 12345678 已发货"), "sms code skips long number");
+        Equal(string.Empty, SmsCodeExtractor.Extract("账户余额 123456 元"), "sms code skips balance");
+        Equal(string.Empty, SmsCodeExtractor.Extract("订单 1234，金额 5678"), "sms code skips multiple numbers");
+        Equal(true, SmsCodeExtractor.HasCode("验证码 4321"), "sms code has code");
+        Equal(false, SmsCodeExtractor.HasCode("纯文字通知"), "sms code plain text");
+
+        // 发件人过滤只影响提醒，不决定收不收短信。
+        Equal(4, SmsSenderFilter.Keywords("10086, 95555; 1069|abc").Length, "sender filter keyword count");
+        Equal(true, SmsSenderFilter.Matches(string.Empty, "任意"), "empty filter matches all");
+        Equal(true, SmsSenderFilter.Matches("10086,95555", "+8610086"), "sender filter substring");
+        Equal(false, SmsSenderFilter.Matches("10086", "95555"), "sender filter excludes others");
+        Equal(false, SmsSenderFilter.Matches("10086", string.Empty), "sender filter needs address");
+
+        List<SmsMessage> batch = new List<SmsMessage>
+        {
+            new SmsMessage(1, "99999", "x", 1, DateTime.MinValue),
+            new SmsMessage(2, "10086", "y", 2, DateTime.MinValue)
+        };
+        Equal(true, SmsSenderFilter.ShouldNotify("10086", batch), "sender filter notifies on match");
+        Equal(false, SmsSenderFilter.ShouldNotify("95555", batch), "sender filter suppresses unmatched batch");
+        Equal(false, SmsSenderFilter.ShouldNotify(string.Empty, new List<SmsMessage>()), "sender filter empty batch");
     }
 
     private static void UsbTetherWatchdogTests()

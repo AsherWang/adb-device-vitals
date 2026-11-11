@@ -38,7 +38,9 @@
     <Compile Include="Models\DeviceSnapshot.cs" />
     <Compile Include="Models\SmsMessage.cs" />
     <Compile Include="Parsing\AdbParsers.cs" />
+    <Compile Include="Parsing\SmsCodeExtractor.cs" />
     <Compile Include="Parsing\SmsRowParser.cs" />
+    <Compile Include="Parsing\SmsSenderFilter.cs" />
     <Compile Include="Services\AdbClient.cs" />
     <Compile Include="Services\AppSettings.cs" />
     <Compile Include="Services\CsvLogger.cs" />
@@ -49,6 +51,7 @@
     <Compile Include="Services\SmsInboxService.cs" />
     <Compile Include="Services\TetherLog.cs" />
     <Compile Include="Services\UpdateChecker.cs" />
+    <Compile Include="Services\WindowsToastService.cs" />
     <Compile Include="Services\UsbTetheringService.cs" />
     <Compile Include="Services\UsbTetherWatchdog.cs" />
     <Compile Include="MainForm.cs" />

@@ -104,6 +104,7 @@ namespace AdbDeviceVitals
             menu.Items.Add("显示面板", null, delegate { RestoreWindow(); });
             menu.Items.Add("立即刷新", null, async delegate { await RefreshSnapshot(true); });
             menu.Items.Add("近期短信", null, delegate { OpenSmsWindow(); });
+            menu.Items.Add("复制最新验证码", null, delegate { CopyLatestSmsCode(); });
             menu.Items.Add("打开日志目录", null, delegate { OpenLogDirectory(); });
             menu.Items.Add(new ToolStripSeparator());
             menu.Items.Add("退出", null, delegate { _allowExit = true; Close(); });
@@ -503,12 +504,25 @@ namespace AdbDeviceVitals
                 _smsErrorNotified = false;
                 if (result.NewMessages.Count > 0)
                 {
-                    // 托盘气泡只给数量和发件人，不带正文；正文只在主动打开的列表里显示。
-                    SmsMessage first = result.NewMessages[0];
-                    string text = result.NewMessages.Count == 1
-                        ? "发件人 " + first.Address + "。点击托盘菜单「近期短信」查看内容。"
-                        : "点击托盘菜单「近期短信」查看内容。";
-                    Notify("收到 " + result.NewMessages.Count + " 条新短信", text, ToolTipIcon.Info);
+                    // 提醒里只放数量、发件人和「有没有验证码」，绝不拼正文或码值。
+                    if (SmsSenderFilter.ShouldNotify(AppSettings.SmsSenderFilter, result.NewMessages))
+                    {
+                        SmsMessage first = result.NewMessages[0];
+                        string title = "收到 " + result.NewMessages.Count + " 条新短信";
+                        string text = result.NewMessages.Count == 1
+                            ? "发件人 " + first.Address + "。"
+                            : "来自 " + result.NewMessages.Count + " 条新消息。";
+                        bool hasCode = false;
+                        foreach (SmsMessage message in result.NewMessages)
+                        {
+                            if (SmsCodeExtractor.HasCode(message.Body)) { hasCode = true; break; }
+                        }
+                        text += hasCode
+                            ? "含验证码，可用托盘菜单「复制最新验证码」。"
+                            : "点击托盘菜单「近期短信」查看。";
+                        bool shown = AppSettings.SmsToastEnabled && WindowsToastService.TryShow(title, text);
+                        if (!shown) Notify(title, text, ToolTipIcon.Info);
+                    }
                     if (_smsWindow != null && !_smsWindow.IsDisposed) _smsWindow.Reload();
                 }
             }
@@ -542,8 +556,9 @@ namespace AdbDeviceVitals
             SmsMessage latest = messages[messages.Length - 1];
             string time = latest.ReceivedAt == DateTime.MinValue
                 ? string.Empty : latest.ReceivedAt.ToString("HH:mm:ss") + "  ";
-            string preview = SmsRowParser.OneLine(latest.Body);
-            if (preview.Length > 90) preview = preview.Substring(0, 90) + "…";
+            // 主窗口属于「路过就能看见」的地方，永不显示正文；只说有没有验证码。
+            string preview = SmsCodeExtractor.HasCode(latest.Body)
+                ? "含验证码 · 正文已隐藏" : "正文已隐藏 · 打开列表后点「显示正文」查看";
             SetSmsPreview(time + latest.Address + "  ·  " + preview, Color.White);
         }
 
@@ -567,6 +582,28 @@ namespace AdbDeviceVitals
                 delegate { _smsService.Clear(); RefreshSmsPreview(); });
             _smsWindow.FormClosed += delegate { _smsWindow = null; };
             _smsWindow.Show(this);
+        }
+
+        /// <summary>托盘菜单：只把最近一条含验证码短信的码放进剪贴板，不显示任何正文。</summary>
+        private void CopyLatestSmsCode()
+        {
+            SmsMessage[] messages = _smsService.Snapshot();
+            for (int i = messages.Length - 1; i >= 0; i--)
+            {
+                string code = SmsCodeExtractor.Extract(messages[i].Body);
+                if (code.Length == 0) continue;
+                try
+                {
+                    Clipboard.SetText(code);
+                    Notify("验证码已复制", "来自 " + messages[i].Address + "，已放入剪贴板。", ToolTipIcon.Info);
+                }
+                catch (Exception ex)
+                {
+                    Notify("复制失败", ex.Message, ToolTipIcon.Warning);
+                }
+                return;
+            }
+            Notify("没有可复制的验证码", "本次运行期间收到的短信里没有检测到验证码。", ToolTipIcon.Info);
         }
 
         private void SetCard(string key, string value, string detail)

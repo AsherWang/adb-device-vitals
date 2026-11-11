@@ -13,9 +13,11 @@ namespace AdbDeviceVitals.Services
             Schema = 1;
             AdbDirectory = string.Empty;
             TargetDeviceSerial = string.Empty;
-            // 短信同步是本次新增的主功能，默认开启；缺字段的旧配置文件也按开启处理。
-            // 不想让程序读短信时，在设置里关掉即可。
-            SmsSyncEnabled = true;
+            SmsSenderFilter = string.Empty;
+            // 读短信属于需要显式授权的能力：默认关闭，旧配置文件缺这个字段也按关闭处理。
+            SmsSyncEnabled = false;
+            // Windows 通知在部分系统上不可用，失败时会自动回退到托盘气泡。
+            SmsToastEnabled = true;
         }
 
         public int Schema;
@@ -26,6 +28,8 @@ namespace AdbDeviceVitals.Services
         public bool AutoStartPcHotspot;
         public bool AutoRecoverUsbTethering;
         public bool SmsSyncEnabled;
+        public bool SmsToastEnabled;
+        public string SmsSenderFilter;
         public DateTime? LastUpdateCheckUtc;
 
         public SettingsData Copy()
@@ -40,6 +44,8 @@ namespace AdbDeviceVitals.Services
                 AutoStartPcHotspot = AutoStartPcHotspot,
                 AutoRecoverUsbTethering = AutoRecoverUsbTethering,
                 SmsSyncEnabled = SmsSyncEnabled,
+                SmsToastEnabled = SmsToastEnabled,
+                SmsSenderFilter = SmsSenderFilter,
                 LastUpdateCheckUtc = LastUpdateCheckUtc
             };
         }
@@ -97,6 +103,8 @@ namespace AdbDeviceVitals.Services
             text.AppendLine("  \"AutoStartPcHotspot\": " + BooleanText(data.AutoStartPcHotspot) + ",");
             text.AppendLine("  \"AutoRecoverUsbTethering\": " + BooleanText(data.AutoRecoverUsbTethering) + ",");
             text.AppendLine("  \"SmsSyncEnabled\": " + BooleanText(data.SmsSyncEnabled) + ",");
+            text.AppendLine("  \"SmsToastEnabled\": " + BooleanText(data.SmsToastEnabled) + ",");
+            text.AppendLine("  \"SmsSenderFilter\": \"" + Escape(data.SmsSenderFilter) + "\",");
             text.AppendLine("  \"LastUpdateCheckUtc\": " + (data.LastUpdateCheckUtc.HasValue
                 ? "\"" + data.LastUpdateCheckUtc.Value.ToUniversalTime().ToString("o", CultureInfo.InvariantCulture) + "\""
                 : "null"));
@@ -111,6 +119,7 @@ namespace AdbDeviceVitals.Services
             else if (string.Equals(key, "AutoStartPcHotspot", StringComparison.OrdinalIgnoreCase)) data.AutoStartPcHotspot = value;
             else if (string.Equals(key, "AutoRecoverUsbTethering", StringComparison.OrdinalIgnoreCase)) data.AutoRecoverUsbTethering = value;
             else if (string.Equals(key, "SmsSyncEnabled", StringComparison.OrdinalIgnoreCase)) data.SmsSyncEnabled = value;
+            else if (string.Equals(key, "SmsToastEnabled", StringComparison.OrdinalIgnoreCase)) data.SmsToastEnabled = value;
         }
 
         private static void ApplyString(SettingsData data, string key, string value)
@@ -122,6 +131,10 @@ namespace AdbDeviceVitals.Services
             else if (string.Equals(key, "TargetDeviceSerial", StringComparison.OrdinalIgnoreCase))
             {
                 data.TargetDeviceSerial = (value ?? string.Empty).Trim();
+            }
+            else if (string.Equals(key, "SmsSenderFilter", StringComparison.OrdinalIgnoreCase))
+            {
+                data.SmsSenderFilter = (value ?? string.Empty).Trim();
             }
             else if (string.Equals(key, "LastUpdateCheckUtc", StringComparison.OrdinalIgnoreCase))
             {

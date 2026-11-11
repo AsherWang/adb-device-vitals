@@ -25,6 +25,8 @@ namespace AdbDeviceVitals
 
                 // 只读一次配置文件；后续轮询命中内存缓存，不会每 2.5 秒碰一次磁盘。
                 AppSettings.Initialize();
+                // Toast 的 AppUserModelID 必须在建窗口之前设置。
+                WindowsToastService.PrepareAppId();
                 Application.EnableVisualStyles();
                 Application.SetCompatibleTextRenderingDefault(false);
                 Application.Run(new MainForm(activationEvent, IsStartupLaunch()));
