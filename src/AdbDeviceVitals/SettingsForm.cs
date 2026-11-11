@@ -13,7 +13,9 @@ namespace AdbDeviceVitals
         private readonly TextBox _adbDirectory;
         private readonly CheckBox _runAtStartup;
         private readonly CheckBox _autoEnableUsbTethering;
+        private readonly CheckBox _autoRecoverUsbTethering;
         private readonly CheckBox _autoStartPcHotspot;
+        private readonly CheckBox _smsSyncEnabled;
         private readonly ComboBox _targetDevice;
         private readonly Label _deviceHint;
         private readonly Button _refreshDevices;
@@ -45,7 +47,7 @@ namespace AdbDeviceVitals
             MaximizeBox = false;
             MinimizeBox = false;
             ShowInTaskbar = false;
-            ClientSize = new Size(560, 440);
+            ClientSize = new Size(560, 496);
             Font = new Font("Segoe UI", 9f);
 
             Label heading = new Label
@@ -116,15 +118,30 @@ namespace AdbDeviceVitals
             {
                 Text = "启动后自动开启 USB 网络共享",
                 AutoSize = true,
-                Location = new Point(20, 294),
+                Location = new Point(20, 292),
                 Checked = AppSettings.AutoEnableUsbTethering
+            };
+            _autoRecoverUsbTethering = new CheckBox
+            {
+                Text = "USB 网络共享断开后自动重新开启",
+                AutoSize = true,
+                Location = new Point(20, 318),
+                Checked = AppSettings.AutoRecoverUsbTethering
             };
             _autoStartPcHotspot = new CheckBox
             {
                 Text = "启动后自动开启电脑热点（把手机网络分享给其他设备）",
                 AutoSize = true,
-                Location = new Point(20, 322),
+                Location = new Point(20, 344),
                 Checked = AppSettings.AutoStartPcHotspot
+            };
+
+            _smsSyncEnabled = new CheckBox
+            {
+                Text = "同步新短信（程序启动后开始监听，不读取历史短信）",
+                AutoSize = true,
+                Location = new Point(20, 370),
+                Checked = AppSettings.SmsSyncEnabled
             };
 
             Label version = new Label
@@ -132,15 +149,15 @@ namespace AdbDeviceVitals
                 Text = "当前版本 " + UpdateChecker.CurrentVersionText,
                 AutoSize = true,
                 ForeColor = Color.DimGray,
-                Location = new Point(20, 352)
+                Location = new Point(20, 404)
             };
-            Button checkUpdates = new Button { Text = "检查更新", Location = new Point(148, 346), Size = new Size(96, 30) };
+            Button checkUpdates = new Button { Text = "检查更新", Location = new Point(148, 398), Size = new Size(96, 30) };
             checkUpdates.Click += async delegate { await CheckForUpdates(checkUpdates); };
 
-            Button clear = new Button { Text = "恢复自动查找", Location = new Point(20, 390), Size = new Size(112, 30) };
+            Button clear = new Button { Text = "恢复自动查找", Location = new Point(20, 440), Size = new Size(112, 30) };
             clear.Click += delegate { _adbDirectory.Text = string.Empty; };
-            Button cancel = new Button { Text = "取消", DialogResult = DialogResult.Cancel, Location = new Point(358, 390), Size = new Size(86, 30) };
-            Button save = new Button { Text = "保存", Location = new Point(454, 390), Size = new Size(86, 30) };
+            Button cancel = new Button { Text = "取消", DialogResult = DialogResult.Cancel, Location = new Point(358, 440), Size = new Size(86, 30) };
+            Button save = new Button { Text = "保存", Location = new Point(454, 440), Size = new Size(86, 30) };
             save.Click += SaveSettings;
 
             Controls.Add(heading);
@@ -154,7 +171,9 @@ namespace AdbDeviceVitals
             Controls.Add(_deviceHint);
             Controls.Add(_runAtStartup);
             Controls.Add(_autoEnableUsbTethering);
+            Controls.Add(_autoRecoverUsbTethering);
             Controls.Add(_autoStartPcHotspot);
+            Controls.Add(_smsSyncEnabled);
             Controls.Add(version);
             Controls.Add(checkUpdates);
             Controls.Add(clear);
@@ -339,7 +358,9 @@ namespace AdbDeviceVitals
                     AdbDirectory = directory,
                     TargetDeviceSerial = serial,
                     AutoEnableUsbTethering = _autoEnableUsbTethering.Checked,
+                    AutoRecoverUsbTethering = _autoRecoverUsbTethering.Checked,
                     AutoStartPcHotspot = _autoStartPcHotspot.Checked,
+                    SmsSyncEnabled = _smsSyncEnabled.Checked,
                     RunAtStartup = _runAtStartup.Checked,
                     LastUpdateCheckUtc = AppSettings.LastUpdateCheckUtc
                 });

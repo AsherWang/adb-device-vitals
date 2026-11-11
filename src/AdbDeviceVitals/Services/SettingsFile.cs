@@ -13,6 +13,9 @@ namespace AdbDeviceVitals.Services
             Schema = 1;
             AdbDirectory = string.Empty;
             TargetDeviceSerial = string.Empty;
+            // 短信同步是本次新增的主功能，默认开启；缺字段的旧配置文件也按开启处理。
+            // 不想让程序读短信时，在设置里关掉即可。
+            SmsSyncEnabled = true;
         }
 
         public int Schema;
@@ -21,6 +24,8 @@ namespace AdbDeviceVitals.Services
         public bool RunAtStartup;
         public bool AutoEnableUsbTethering;
         public bool AutoStartPcHotspot;
+        public bool AutoRecoverUsbTethering;
+        public bool SmsSyncEnabled;
         public DateTime? LastUpdateCheckUtc;
 
         public SettingsData Copy()
@@ -33,6 +38,8 @@ namespace AdbDeviceVitals.Services
                 RunAtStartup = RunAtStartup,
                 AutoEnableUsbTethering = AutoEnableUsbTethering,
                 AutoStartPcHotspot = AutoStartPcHotspot,
+                AutoRecoverUsbTethering = AutoRecoverUsbTethering,
+                SmsSyncEnabled = SmsSyncEnabled,
                 LastUpdateCheckUtc = LastUpdateCheckUtc
             };
         }
@@ -88,6 +95,8 @@ namespace AdbDeviceVitals.Services
             text.AppendLine("  \"RunAtStartup\": " + BooleanText(data.RunAtStartup) + ",");
             text.AppendLine("  \"AutoEnableUsbTethering\": " + BooleanText(data.AutoEnableUsbTethering) + ",");
             text.AppendLine("  \"AutoStartPcHotspot\": " + BooleanText(data.AutoStartPcHotspot) + ",");
+            text.AppendLine("  \"AutoRecoverUsbTethering\": " + BooleanText(data.AutoRecoverUsbTethering) + ",");
+            text.AppendLine("  \"SmsSyncEnabled\": " + BooleanText(data.SmsSyncEnabled) + ",");
             text.AppendLine("  \"LastUpdateCheckUtc\": " + (data.LastUpdateCheckUtc.HasValue
                 ? "\"" + data.LastUpdateCheckUtc.Value.ToUniversalTime().ToString("o", CultureInfo.InvariantCulture) + "\""
                 : "null"));
@@ -100,6 +109,8 @@ namespace AdbDeviceVitals.Services
             if (string.Equals(key, "RunAtStartup", StringComparison.OrdinalIgnoreCase)) data.RunAtStartup = value;
             else if (string.Equals(key, "AutoEnableUsbTethering", StringComparison.OrdinalIgnoreCase)) data.AutoEnableUsbTethering = value;
             else if (string.Equals(key, "AutoStartPcHotspot", StringComparison.OrdinalIgnoreCase)) data.AutoStartPcHotspot = value;
+            else if (string.Equals(key, "AutoRecoverUsbTethering", StringComparison.OrdinalIgnoreCase)) data.AutoRecoverUsbTethering = value;
+            else if (string.Equals(key, "SmsSyncEnabled", StringComparison.OrdinalIgnoreCase)) data.SmsSyncEnabled = value;
         }
 
         private static void ApplyString(SettingsData data, string key, string value)

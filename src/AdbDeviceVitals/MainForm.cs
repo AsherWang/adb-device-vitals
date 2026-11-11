@@ -8,6 +8,7 @@ using System.Threading.Tasks;
 using System.Windows.Forms;
 using AdbDeviceVitals.Controls;
 using AdbDeviceVitals.Models;
+using AdbDeviceVitals.Parsing;
 using AdbDeviceVitals.Services;
 
 namespace AdbDeviceVitals
@@ -22,6 +23,11 @@ namespace AdbDeviceVitals
         private readonly AdbClient _adb;
         private readonly DeviceMonitor _monitor;
         private readonly CsvLogger _logger;
+        private readonly SmsInboxService _smsService;
+        private SmsForm _smsWindow;
+        private Label _smsPreview;
+        private bool _smsPollRunning;
+        private bool _smsErrorNotified;
         private readonly Timer _timer;
         private readonly Timer _activationTimer;
         private readonly System.Threading.EventWaitHandle _activationEvent;
@@ -41,6 +47,10 @@ namespace AdbDeviceVitals
         private bool _needsDeviceChoice;
         private bool _backgroundStarted;
         private bool _usbTetherRunning;
+        private readonly UsbTetherWatchdog _usbWatchdog = new UsbTetherWatchdog();
+        private bool _usbWatchdogRunning;
+        private bool _usbWatchdogFailureNotified;
+        private System.Threading.CancellationTokenSource _usbWatchdogCancellation;
         private CheckBox _pcHotspotSwitch;
         private Label _pcHotspotState;
         private Label _pcHotspotDetail;
@@ -81,6 +91,7 @@ namespace AdbDeviceVitals
             _adb = new AdbClient();
             _monitor = new DeviceMonitor(_adb);
             _logger = new CsvLogger();
+            _smsService = new SmsInboxService(_adb);
             _chart = new HistoryChart();
             BuildLayout();
 
@@ -92,6 +103,7 @@ namespace AdbDeviceVitals
             ContextMenuStrip menu = new ContextMenuStrip();
             menu.Items.Add("显示面板", null, delegate { RestoreWindow(); });
             menu.Items.Add("立即刷新", null, async delegate { await RefreshSnapshot(true); });
+            menu.Items.Add("近期短信", null, delegate { OpenSmsWindow(); });
             menu.Items.Add("打开日志目录", null, delegate { OpenLogDirectory(); });
             menu.Items.Add(new ToolStripSeparator());
             menu.Items.Add("退出", null, delegate { _allowExit = true; Close(); });
@@ -139,6 +151,7 @@ namespace AdbDeviceVitals
                 Notify("配置文件", "无法读取或写入配置文件，已临时使用默认设置：" + configError, ToolTipIcon.Warning);
             _timer.Start();
             if (_activationEvent != null) _activationTimer.Start();
+            RefreshSmsPreview();
             await RefreshSnapshot(true);
             _pcHotspotChainPending = true;
             StartUsbTethering();
@@ -151,11 +164,12 @@ namespace AdbDeviceVitals
             TableLayoutPanel root = new TableLayoutPanel();
             root.Dock = DockStyle.Fill;
             root.Padding = new Padding(20);
-            root.RowCount = 5;
+            root.RowCount = 6;
             root.ColumnCount = 1;
             root.RowStyles.Add(new RowStyle(SizeType.Absolute, 68));
             root.RowStyles.Add(new RowStyle(SizeType.Percent, 62));
             root.RowStyles.Add(new RowStyle(SizeType.Percent, 38));
+            root.RowStyles.Add(new RowStyle(SizeType.Absolute, 48));
             root.RowStyles.Add(new RowStyle(SizeType.Absolute, 48));
             root.RowStyles.Add(new RowStyle(SizeType.Absolute, 28));
             Controls.Add(root);
@@ -192,6 +206,7 @@ namespace AdbDeviceVitals
             root.Controls.Add(_chart, 0, 2);
 
             AddPcHotspotBar(root);
+            AddSmsBar(root);
 
             Panel footer = new Panel { Dock = DockStyle.Fill };
             _updated = new Label { Text = "尚未采集", AutoSize = true, ForeColor = _muted, Location = new Point(0, 7) };
@@ -208,7 +223,7 @@ namespace AdbDeviceVitals
             footer.Resize += delegate { _tetherStatus.Width = Math.Max(80, footer.Width - _tetherStatus.Left); };
             footer.Controls.Add(_updated);
             footer.Controls.Add(_tetherStatus);
-            root.Controls.Add(footer, 0, 4);
+            root.Controls.Add(footer, 0, 5);
         }
 
         /// <summary>
@@ -266,16 +281,68 @@ namespace AdbDeviceVitals
             root.Controls.Add(bar, 0, 3);
         }
 
+        /// <summary>底部只放最新一条的摘要，完整列表在「查看列表」窗口里。</summary>
+        private void AddSmsBar(TableLayoutPanel root)
+        {
+            Panel bar = new Panel { Dock = DockStyle.Fill, BackColor = _card, Margin = new Padding(4, 8, 4, 0) };
+            Label heading = new Label
+            {
+                Text = "近期短信",
+                AutoSize = true,
+                ForeColor = _muted,
+                Font = new Font("Segoe UI Semibold", 8.5f),
+                Location = new Point(15, 17)
+            };
+            _smsPreview = new Label
+            {
+                Text = "监听中 · 本次运行期间暂无新短信",
+                AutoSize = false,
+                AutoEllipsis = true,
+                ForeColor = _muted,
+                Location = new Point(84, 15),
+                Height = 20,
+                Anchor = AnchorStyles.Top | AnchorStyles.Left | AnchorStyles.Right
+            };
+            Button open = new Button
+            {
+                Text = "查看列表",
+                Size = new Size(88, 26),
+                FlatStyle = FlatStyle.Flat,
+                BackColor = Color.FromArgb(38, 48, 62),
+                ForeColor = Color.White,
+                Anchor = AnchorStyles.Top | AnchorStyles.Right
+            };
+            open.FlatAppearance.BorderSize = 0;
+            open.Click += delegate { OpenSmsWindow(); };
+            bar.Controls.Add(heading);
+            bar.Controls.Add(_smsPreview);
+            bar.Controls.Add(open);
+            bar.Resize += delegate
+            {
+                open.Location = new Point(Math.Max(120, bar.Width - open.Width - 12), 10);
+                _smsPreview.Width = Math.Max(80, open.Left - _smsPreview.Left - 12);
+            };
+            root.Controls.Add(bar, 0, 4);
+        }
+
         private async Task OpenSettings()
         {
             // 允许程序运行期间手改 settings.json，打开设置时重新读一次。
             AppSettings.Reload();
+            bool recoverBefore = AppSettings.AutoRecoverUsbTethering;
+            bool smsBefore = AppSettings.SmsSyncEnabled;
             using (SettingsForm dialog = new SettingsForm(_adb, delegate(IWin32Window owner) { return CheckForUpdates(owner, true); }))
             {
                 if (dialog.ShowDialog(this) != DialogResult.OK || _exitingForUpdate) return;
             }
 
             if (_exitingForUpdate || IsDisposed) return;
+            // 在设置里刚把守护从关打开：视为用户重新授权，解除此前手动关闭留下的暂停。
+            if (!recoverBefore && AppSettings.AutoRecoverUsbTethering) _usbWatchdog.NoteManualOn();
+            // 重新打开短信同步时按「打开之前的就不管了」重建基线，不补报关闭期间的短信。
+            if (!smsBefore && AppSettings.SmsSyncEnabled) _smsService.ResetBaseline();
+            if (smsBefore && !AppSettings.SmsSyncEnabled) _smsErrorNotified = false;
+            RefreshSmsPreview();
             _adb.ReloadPath();
             StartUsbTethering();
             if (AppSettings.AutoStartPcHotspot) StartPcHotspot();
@@ -323,7 +390,9 @@ namespace AdbDeviceVitals
                     _lastLog = DateTime.Now;
                 }
                 CheckAlerts(snapshot);
+                CheckUsbTetherWatchdog(snapshot);
                 RefreshPcHotspotStatus(false);
+                PollSmsAsync(snapshot);
             }
             catch (Exception ex)
             {
@@ -396,6 +465,110 @@ namespace AdbDeviceVitals
             _tray.ShowBalloonTip(4000);
         }
 
+        /// <summary>
+        /// 短信检查挂在每 2.5 秒的采集上，服务内部再节流到 10 秒；这里不 await，
+        /// 免得一条 content query 拖慢整轮状态刷新。
+        /// </summary>
+        private async void PollSmsAsync(DeviceSnapshot snapshot)
+        {
+            if (!AppSettings.SmsSyncEnabled || !snapshot.Connected || _smsPollRunning) return;
+            _smsPollRunning = true;
+            try
+            {
+                SmsPollResult result = await _smsService.PollAsync(snapshot.DeviceSerial, true, DateTime.UtcNow);
+                if (IsDisposed || !IsHandleCreated) return;
+                ApplySmsResult(result);
+            }
+            catch (Exception ex)
+            {
+                if (!IsDisposed) SetSmsPreview("短信监听失败：" + ex.Message, Color.FromArgb(255, 174, 66));
+            }
+            finally { _smsPollRunning = false; }
+        }
+
+        private void ApplySmsResult(SmsPollResult result)
+        {
+            if (result.Error.Length > 0)
+            {
+                if (!_smsErrorNotified)
+                {
+                    Notify("短信同步", result.PermissionDenied
+                        ? "手机拒绝了 ADB 读取短信的权限，请查看主窗口底部提示。"
+                        : result.Error, ToolTipIcon.Warning);
+                    _smsErrorNotified = true;
+                }
+            }
+            else
+            {
+                _smsErrorNotified = false;
+                if (result.NewMessages.Count > 0)
+                {
+                    // 托盘气泡只给数量和发件人，不带正文；正文只在主动打开的列表里显示。
+                    SmsMessage first = result.NewMessages[0];
+                    string text = result.NewMessages.Count == 1
+                        ? "发件人 " + first.Address + "。点击托盘菜单「近期短信」查看内容。"
+                        : "点击托盘菜单「近期短信」查看内容。";
+                    Notify("收到 " + result.NewMessages.Count + " 条新短信", text, ToolTipIcon.Info);
+                    if (_smsWindow != null && !_smsWindow.IsDisposed) _smsWindow.Reload();
+                }
+            }
+            RefreshSmsPreview();
+        }
+
+        private void RefreshSmsPreview()
+        {
+            if (_smsPreview == null) return;
+            if (!AppSettings.SmsSyncEnabled)
+            {
+                SetSmsPreview("短信同步已关闭（可在设置中开启）", _muted);
+                return;
+            }
+            string error = _smsService.LastError;
+            if (error.Length > 0)
+            {
+                SetSmsPreview(error, Color.FromArgb(255, 174, 66));
+                return;
+            }
+
+            SmsMessage[] messages = _smsService.Snapshot();
+            if (messages.Length == 0)
+            {
+                SetSmsPreview(_smsService.IsListening
+                    ? "监听中 · 本次运行期间暂无新短信"
+                    : "正在建立监听基线…", _muted);
+                return;
+            }
+
+            SmsMessage latest = messages[messages.Length - 1];
+            string time = latest.ReceivedAt == DateTime.MinValue
+                ? string.Empty : latest.ReceivedAt.ToString("HH:mm:ss") + "  ";
+            string preview = SmsRowParser.OneLine(latest.Body);
+            if (preview.Length > 90) preview = preview.Substring(0, 90) + "…";
+            SetSmsPreview(time + latest.Address + "  ·  " + preview, Color.White);
+        }
+
+        private void SetSmsPreview(string text, Color color)
+        {
+            if (_smsPreview == null) return;
+            _smsPreview.Text = text;
+            _smsPreview.ForeColor = color;
+        }
+
+        private void OpenSmsWindow()
+        {
+            if (_smsWindow != null && !_smsWindow.IsDisposed)
+            {
+                _smsWindow.Reload();
+                _smsWindow.Activate();
+                return;
+            }
+            _smsWindow = new SmsForm(
+                delegate { return _smsService.Snapshot(); },
+                delegate { _smsService.Clear(); RefreshSmsPreview(); });
+            _smsWindow.FormClosed += delegate { _smsWindow = null; };
+            _smsWindow.Show(this);
+        }
+
         private void SetCard(string key, string value, string detail)
         {
             CardLabels card = _cards[key];
@@ -410,6 +583,80 @@ namespace AdbDeviceVitals
             Show();
             WindowState = FormWindowState.Normal;
             Activate();
+        }
+
+        /// <summary>每 2.5 秒随采集喂一次快照；节流、防抖和重试冷却都在状态机里判定。</summary>
+        private void CheckUsbTetherWatchdog(DeviceSnapshot snapshot)
+        {
+            bool busy = _usbTetherRunning || _tetherSwitchBusy || _usbWatchdogRunning;
+            bool recover = _usbWatchdog.Observe(snapshot, DateTime.UtcNow,
+                AppSettings.AutoRecoverUsbTethering, AppSettings.AutoEnableUsbTethering, busy);
+            if (recover) StartUsbTetherRecovery();
+        }
+
+        /// <summary>
+        /// 复用手动开启那条链路：SetEnabledAsync 内部会再读一次 dumpsys tethering，
+        /// 共享其实还在时只返回 AlreadyActive，不会重复下发 setFunctions。
+        /// </summary>
+        private void StartUsbTetherRecovery()
+        {
+            if (_usbWatchdogRunning || _usbTetherRunning || _tetherSwitchBusy) return;
+            _usbWatchdogRunning = true;
+            System.Threading.CancellationTokenSource source = new System.Threading.CancellationTokenSource();
+            _usbWatchdogCancellation = source;
+            ShowTetherStatus("USB 网络共享已断开，正在尝试恢复…", _muted);
+            Notify("USB 网络共享", "检测到网络共享已断开，正在尝试重新开启。", ToolTipIcon.Info);
+
+            UsbTetheringService service = new UsbTetheringService(_adb);
+            service.SetEnabledAsync(true, source.Token).ContinueWith(delegate(Task<UsbTetherResult> completed)
+            {
+                if (source.IsCancellationRequested || !object.ReferenceEquals(_usbWatchdogCancellation, source)) return;
+                UsbTetherResult result = completed.IsFaulted
+                    ? UsbTetherResult.Failed(completed.Exception.GetBaseException().Message)
+                    : completed.Result;
+                if (IsDisposed || !IsHandleCreated) return;
+                try
+                {
+                    BeginInvoke(new MethodInvoker(delegate
+                    {
+                        if (IsDisposed || !object.ReferenceEquals(_usbWatchdogCancellation, source)) return;
+                        ShowUsbWatchdogResult(result);
+                    }));
+                }
+                catch (InvalidOperationException)
+                {
+                }
+            }, System.Threading.CancellationToken.None, TaskContinuationOptions.None, TaskScheduler.Default);
+        }
+
+        private void ShowUsbWatchdogResult(UsbTetherResult result)
+        {
+            _usbWatchdogRunning = false;
+            if (!result.Completed) return;
+            if (result.Succeeded)
+            {
+                _usbWatchdogFailureNotified = false;
+                ShowTetherStatus(result.Changed ? "已自动恢复 USB 网络共享。" : "USB 网络共享已恢复。", _green);
+                if (result.Changed) Notify("USB 网络共享", "已自动恢复 USB 网络共享。", ToolTipIcon.Info);
+            }
+            else
+            {
+                ShowTetherStatus("自动恢复 USB 网络共享失败：" + result.Message, Color.FromArgb(255, 174, 66));
+                if (!_usbWatchdogFailureNotified)
+                {
+                    Notify("USB 网络共享", "自动恢复失败：" + result.Message + "。稍后会再试。", ToolTipIcon.Warning);
+                    _usbWatchdogFailureNotified = true;
+                }
+            }
+        }
+
+        private void CancelUsbTetherWatchdog()
+        {
+            _usbWatchdogRunning = false;
+            System.Threading.CancellationTokenSource source = _usbWatchdogCancellation;
+            _usbWatchdogCancellation = null;
+            if (source == null) return;
+            try { source.Cancel(); } catch (ObjectDisposedException) { }
         }
 
         private void StartUsbTethering()
@@ -473,6 +720,10 @@ namespace AdbDeviceVitals
         {
             if (_suppressTetherSwitch || _usbTetherSwitch == null) return;
             bool enable = _usbTetherSwitch.Checked;
+            // 手动关闭是用户明确的意思，守护不该立刻把共享抢回来；重新手动打开即解除暂停。
+            if (enable) _usbWatchdog.NoteManualOn();
+            else _usbWatchdog.NoteManualOff();
+            CancelUsbTetherWatchdog();
             _tetherSwitchBusy = true;
             _usbTetherSwitch.Enabled = false;
             CancelUsbTethering();
@@ -798,6 +1049,7 @@ namespace AdbDeviceVitals
                 return;
             }
             CancelUsbTethering();
+            CancelUsbTetherWatchdog();
             CancelPcHotspot();
             _tray.Visible = false;
             _tray.Dispose();
@@ -808,7 +1060,13 @@ namespace AdbDeviceVitals
             if (disposing)
             {
                 CancelUsbTethering();
+                CancelUsbTetherWatchdog();
                 CancelPcHotspot();
+                if (_smsWindow != null)
+                {
+                    try { _smsWindow.Close(); } catch { }
+                    _smsWindow = null;
+                }
                 if (_timer != null) _timer.Dispose();
                 if (_activationTimer != null) _activationTimer.Dispose();
                 if (_chart != null) _chart.Dispose();

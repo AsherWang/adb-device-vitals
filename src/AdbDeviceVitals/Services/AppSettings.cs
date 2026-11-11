@@ -140,6 +140,20 @@ namespace AdbDeviceVitals.Services
             set { Update(delegate(SettingsData data) { data.AutoEnableUsbTethering = value; }, false, true); }
         }
 
+        /// <summary>运行中发现 USB 网络共享掉线时，尝试重新开启，保持已经开着的状态。</summary>
+        public static bool AutoRecoverUsbTethering
+        {
+            get { lock (Gate) { return _current.AutoRecoverUsbTethering; } }
+            set { Update(delegate(SettingsData data) { data.AutoRecoverUsbTethering = value; }, false, true); }
+        }
+
+        /// <summary>启动后监听新短信；关闭时既不读短信也不建立时间基线。</summary>
+        public static bool SmsSyncEnabled
+        {
+            get { lock (Gate) { return _current.SmsSyncEnabled; } }
+            set { Update(delegate(SettingsData data) { data.SmsSyncEnabled = value; }, false, true); }
+        }
+
         /// <summary>启动后自动开启电脑侧 Wi-Fi 热点，把手机网络转发给其他设备。</summary>
         public static bool AutoStartPcHotspot
         {

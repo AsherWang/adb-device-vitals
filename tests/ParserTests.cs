@@ -17,6 +17,8 @@ internal static class ParserTests
         NetworkStats();
         DeviceSelectionTests();
         SettingsFileTests();
+        SmsParserTests();
+        UsbTetherWatchdogTests();
         Updates();
         Console.WriteLine(_failed == 0 ? "All parser tests passed." : _failed + " parser test(s) failed.");
         return _failed == 0 ? 0 : 1;
@@ -177,7 +179,9 @@ internal static class ParserTests
             TargetDeviceSerial = "b522a8f6",
             RunAtStartup = true,
             AutoEnableUsbTethering = true,
+            AutoRecoverUsbTethering = true,
             AutoStartPcHotspot = false,
+            SmsSyncEnabled = true,
             LastUpdateCheckUtc = new DateTime(2026, 11, 8, 3, 0, 0, DateTimeKind.Utc)
         };
         string json = SettingsFile.Serialize(original);
@@ -187,7 +191,13 @@ internal static class ParserTests
         Equal("b522a8f6", parsed.TargetDeviceSerial, "settings serial");
         Equal(true, parsed.RunAtStartup, "settings run at startup");
         Equal(true, parsed.AutoEnableUsbTethering, "settings auto usb tethering");
+        Equal(true, parsed.AutoRecoverUsbTethering, "settings auto recover usb tethering");
         Equal(false, parsed.AutoStartPcHotspot, "settings auto hotspot");
+        Equal(true, parsed.SmsSyncEnabled, "settings sms sync enabled");
+        Equal(true, json.IndexOf("\"SmsSyncEnabled\": true", StringComparison.Ordinal) >= 0,
+            "settings sms flag serialized");
+        Equal(true, json.IndexOf("\"AutoRecoverUsbTethering\": true", StringComparison.Ordinal) >= 0,
+            "settings recover flag serialized");
         Equal(original.LastUpdateCheckUtc.Value.ToString("o"),
             parsed.LastUpdateCheckUtc.HasValue ? parsed.LastUpdateCheckUtc.Value.ToString("o") : null,
             "settings update timestamp");
@@ -201,6 +211,14 @@ internal static class ParserTests
         Equal(string.Empty, SettingsFile.Parse(string.Empty).TargetDeviceSerial, "null text is safe");
         Equal(true, SettingsFile.Parse("{\"Unknown\": \"x\", \"RunAtStartup\": true}").RunAtStartup,
             "unknown setting ignored");
+        Equal(false, SettingsFile.Parse("{\"RunAtStartup\": true}").AutoRecoverUsbTethering,
+            "missing recover flag defaults off in old files");
+        Equal(true, SettingsFile.Parse("{\"RunAtStartup\": true}").SmsSyncEnabled,
+            "missing sms flag defaults on in old files");
+        Equal(false, SettingsFile.Parse("{\"SmsSyncEnabled\": false}").SmsSyncEnabled,
+            "sms flag can be turned off");
+        Equal(true, SettingsFile.Parse("{\"AutoRecoverUsbTethering\": true}").AutoRecoverUsbTethering,
+            "recover flag parsed");
 
         // 写坏一项不能丢掉整份配置。
         SettingsData broken = SettingsFile.Parse("{\"AutoStartPcHotspot\": true, broken");
@@ -218,6 +236,101 @@ internal static class ParserTests
         Equal("a\tb", unicode.AdbDirectory, "tab escape");
         Equal(true, SettingsFile.Serialize(unicode).IndexOf("a\\tb", StringComparison.Ordinal) >= 0,
             "control character re-escaped");
+    }
+
+    private static void SmsParserTests()
+    {
+        string normal = "Row: 0 _id=10632, address=10099, date=1793353114426, body=您的验证码是 123456\n";
+        IList<SmsMessage> rows = SmsRowParser.Parse(normal);
+        Equal(1, rows.Count, "sms single row");
+        Equal(10632L, rows[0].Id, "sms id");
+        Equal("10099", rows[0].Address, "sms address");
+        Equal(1793353114426L, rows[0].DateMs, "sms date");
+        Equal("您的验证码是 123456", rows[0].Body, "sms body");
+        Equal(true, rows[0].ReceivedAt != DateTime.MinValue, "sms local time");
+
+        // 正文里的逗号、等号、甚至 body= 都不能把记录切断。
+        string tricky = "Row: 0 _id=5, address=+8613800000000, date=1793353114426, body=金额=12, 剩余 3, body=abc\n"
+            + "Row: 1 _id=6, address=95555, date=1793353114427, body=第二条\n";
+        IList<SmsMessage> trickyRows = SmsRowParser.Parse(tricky);
+        Equal(2, trickyRows.Count, "sms two rows with punctuation");
+        Equal("金额=12, 剩余 3, body=abc", trickyRows[0].Body, "sms body keeps commas and equals");
+        Equal("第二条", trickyRows[1].Body, "sms second row body");
+
+        // 实测有短信正文带换行：一条 Row 会横跨多个物理行，必须并回同一条记录。
+        string multiline = "Row: 0 _id=7, address=10086, date=1793353114426, body=第一行\n第二行\n"
+            + "Row: 1 _id=8, address=10010, date=1793353114427, body=下一条\n";
+        IList<SmsMessage> multilineRows = SmsRowParser.Parse(multiline);
+        Equal(2, multilineRows.Count, "sms rows with multiline body");
+        Equal("第一行\n第二行", multilineRows[0].Body, "sms multiline body preserved");
+        Equal("下一条", multilineRows[1].Body, "sms row after multiline body");
+
+        Equal(0, SmsRowParser.Parse("No result found.\n").Count, "sms no-result output");
+        Equal(true, SmsRowParser.IsEmptyResult("No result found."), "sms empty result marker");
+        Equal(0, SmsRowParser.Parse(string.Empty).Count, "sms empty output");
+        Equal(0, SmsRowParser.Parse("Noise before rows\nRow: 0 address=1, date=2, body=x\n").Count,
+            "sms row without id is skipped");
+        Equal("ok", SmsRowParser.Parse("Noise before rows\nRow: 0 _id=9, address=1, date=2, body=ok\n")[0].Body,
+            "sms leading noise ignored");
+
+        Equal(true, SmsRowParser.IsPermissionDenied(
+            "Permission Denial: reading com.android.providers.telephony requires android.permission.READ_SMS", string.Empty),
+            "sms permission denial detected");
+        Equal(true, SmsRowParser.IsPermissionDenied(string.Empty, "java.lang.SecurityException: READ_SMS"),
+            "sms security exception detected");
+        Equal(false, SmsRowParser.IsPermissionDenied(normal, string.Empty), "sms normal output is not a permission error");
+
+        Equal("a b c", SmsRowParser.OneLine("a\r\nb   c\n"), "sms one-line preview");
+        Equal(DateTime.MinValue, SmsRowParser.ToLocalTime(0), "sms invalid date is safe");
+    }
+
+    private static void UsbTetherWatchdogTests()
+    {
+        DateTime t = new DateTime(2026, 11, 11, 5, 0, 0, DateTimeKind.Utc);
+        DeviceSnapshot on = new DeviceSnapshot { Connected = true, UsbTetheringActive = true, DeviceSerial = "device-a" };
+        DeviceSnapshot off = new DeviceSnapshot { Connected = true, UsbTetheringActive = false, DeviceSerial = "device-a" };
+        DeviceSnapshot offline = new DeviceSnapshot { Connected = false, UsbTetheringActive = false, DeviceSerial = "device-a" };
+
+        // 启动后本来就没开过：守护不主动开，首次开启归「启动后自动开启」那个开关管。
+        UsbTetherWatchdog cold = new UsbTetherWatchdog();
+        Equal(false, cold.Observe(off, t, true, false, false), "cold start does not enable");
+        Equal(false, cold.Observe(off, t.AddSeconds(120), true, false, false), "cold start stays quiet");
+
+        // 开过之后掉线：连续确认一段时间才动手，失败后按冷却间隔重试。
+        UsbTetherWatchdog warm = new UsbTetherWatchdog();
+        Equal(false, warm.Observe(on, t, true, false, false), "active state is quiet");
+        Equal(false, warm.Observe(off, t.AddSeconds(2), true, false, false), "first inactive sample waits");
+        Equal(false, warm.Observe(off, t.AddSeconds(10), true, false, false), "check interval throttles");
+        Equal(true, warm.Observe(off, t.AddSeconds(22), true, false, false), "recovers after confirm window");
+        Equal(false, warm.Observe(off, t.AddSeconds(42), true, false, false), "retry cooldown blocks second attempt");
+        Equal(false, warm.Observe(off, t.AddSeconds(62), true, false, false), "still cooling down");
+        Equal(true, warm.Observe(off, t.AddSeconds(82), true, false, false), "retry allowed after cooldown");
+
+        // 开关关闭、设备掉线、别的 USB 切换任务在跑：一律不插手。
+        UsbTetherWatchdog guarded = new UsbTetherWatchdog();
+        Equal(false, guarded.Observe(on, t, true, false, false), "guarded sees active");
+        Equal(false, guarded.Observe(off, t.AddSeconds(30), false, false, false), "disabled setting blocks recovery");
+        Equal(false, guarded.Observe(offline, t.AddSeconds(60), true, false, false), "offline device blocks recovery");
+        Equal(false, guarded.Observe(off, t.AddSeconds(90), true, false, true), "busy switch blocks recovery");
+
+        // 手动关过共享就暂停，重新手动打开（或在设置里重新启用守护）才恢复。
+        guarded.NoteManualOff();
+        Equal(false, guarded.Observe(off, t.AddSeconds(150), true, false, false), "manual off suspends recovery");
+        guarded.NoteManualOn();
+        Equal(false, guarded.Observe(off, t.AddSeconds(170), true, false, false), "manual on still needs confirm");
+        Equal(true, guarded.Observe(off, t.AddSeconds(190), true, false, false), "manual on resumes recovery");
+
+        // 开了「启动后自动开启」时，即使还没观察到共享开着，也按本来就该开着处理。
+        UsbTetherWatchdog assumed = new UsbTetherWatchdog();
+        Equal(false, assumed.Observe(off, t, true, true, false), "assumed active still waits");
+        Equal(true, assumed.Observe(off, t.AddSeconds(20), true, true, false), "startup auto-enable covers a cold drop");
+
+        // 恢复成功后重新读到已开启，不再继续折腾。
+        UsbTetherWatchdog recovered = new UsbTetherWatchdog();
+        Equal(false, recovered.Observe(on, t, true, false, false), "recovered sees active");
+        Equal(false, recovered.Observe(off, t.AddSeconds(20), true, false, false), "recovered waits");
+        Equal(true, recovered.Observe(off, t.AddSeconds(40), true, false, false), "recovered triggers");
+        Equal(false, recovered.Observe(on, t.AddSeconds(60), true, false, false), "active again is quiet");
     }
 
     private static void Equal(object expected, object actual, string name)
