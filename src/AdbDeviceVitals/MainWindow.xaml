@@ -1,0 +1,165 @@
+<ui:FluentWindow x:Class="AdbDeviceVitals.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
+        xmlns:controls="clr-namespace:AdbDeviceVitals.Controls"
+        Title="ADB Device Vitals"
+        Width="960" Height="780"
+        MinWidth="820" MinHeight="620"
+        WindowStartupLocation="CenterScreen"
+        ExtendsContentIntoTitleBar="True"
+        WindowBackdropType="Mica"
+        FontFamily="Segoe UI" FontSize="13">
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <ui:TitleBar Grid.Row="0" Title="ADB Device Vitals" />
+
+        <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
+            <StackPanel Margin="28,6,28,12">
+                <Grid Margin="0,0,0,6">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                        <TextBlock Text="设备状态" FontSize="26" FontWeight="SemiBold" />
+                        <TextBlock Text="通过本机 ADB 读取，每 2.5 秒刷新" FontSize="12" Opacity="0.62" Margin="0,3,0,0" />
+                    </StackPanel>
+                    <TextBlock Grid.Column="2" x:Name="ConnectionStatus" Text="正在连接…"
+                               VerticalAlignment="Center" Margin="0,0,16,0"
+                               FontSize="13" MouseLeftButtonUp="ConnectionStatus_Click" />
+                    <ui:Button Grid.Column="3" x:Name="SettingsButton" Content="设置"
+                               Appearance="Secondary" Padding="18,7" Click="SettingsButton_Click" />
+                </Grid>
+
+                <UniformGrid Columns="3" Rows="2">
+                    <ui:Card Margin="5">
+                        <StackPanel Margin="16,8">
+                            <TextBlock Text="蜂窝网络" FontSize="12" Opacity="0.62" />
+                            <TextBlock x:Name="CardNetworkValue" Text="—" FontSize="23" FontWeight="SemiBold"
+                                       Margin="0,3,0,0" TextTrimming="CharacterEllipsis" />
+                            <TextBlock x:Name="CardNetworkDetail" Text="等待数据" FontSize="12" Opacity="0.62"
+                                       Margin="0,4,0,0" MinHeight="20" TextWrapping="Wrap" />
+                        </StackPanel>
+                    </ui:Card>
+
+                    <ui:Card Margin="5">
+                        <StackPanel Margin="16,8">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Grid.Column="0" Text="网络共享" FontSize="12" Opacity="0.62" VerticalAlignment="Center" />
+                                <ui:ToggleSwitch Grid.Column="1" x:Name="UsbTetherSwitch" Content="USB"
+                                                 IsEnabled="False" Click="UsbTetherSwitch_Click" />
+                            </Grid>
+                            <TextBlock x:Name="CardHotspotValue" Text="—" FontSize="23" FontWeight="SemiBold"
+                                       Margin="0,3,0,0" TextTrimming="CharacterEllipsis" />
+                            <TextBlock x:Name="CardHotspotDetail" Text="等待数据" FontSize="12" Opacity="0.62"
+                                       Margin="0,4,0,0" MinHeight="20" TextWrapping="Wrap" />
+                        </StackPanel>
+                    </ui:Card>
+
+                    <ui:Card Margin="5">
+                        <StackPanel Margin="16,8">
+                            <TextBlock Text="电池" FontSize="12" Opacity="0.62" />
+                            <TextBlock x:Name="CardBatteryValue" Text="—" FontSize="23" FontWeight="SemiBold"
+                                       Margin="0,3,0,0" TextTrimming="CharacterEllipsis" />
+                            <TextBlock x:Name="CardBatteryDetail" Text="等待数据" FontSize="12" Opacity="0.62"
+                                       Margin="0,4,0,0" MinHeight="20" TextWrapping="Wrap" />
+                        </StackPanel>
+                    </ui:Card>
+
+                    <ui:Card Margin="5">
+                        <StackPanel Margin="16,8">
+                            <TextBlock Text="温度与热状态" FontSize="12" Opacity="0.62" />
+                            <TextBlock x:Name="CardThermalValue" Text="—" FontSize="23" FontWeight="SemiBold"
+                                       Margin="0,3,0,0" TextTrimming="CharacterEllipsis" />
+                            <TextBlock x:Name="CardThermalDetail" Text="等待数据" FontSize="12" Opacity="0.62"
+                                       Margin="0,4,0,0" MinHeight="20" TextWrapping="Wrap" />
+                        </StackPanel>
+                    </ui:Card>
+
+                    <ui:Card Margin="5">
+                        <StackPanel Margin="16,8">
+                            <TextBlock Text="实时流量" FontSize="12" Opacity="0.62" />
+                            <TextBlock x:Name="CardTrafficValue" Text="—" FontSize="23" FontWeight="SemiBold"
+                                       Margin="0,3,0,0" TextTrimming="CharacterEllipsis" />
+                            <TextBlock x:Name="CardTrafficDetail" Text="等待数据" FontSize="12" Opacity="0.62"
+                                       Margin="0,4,0,0" MinHeight="20" TextWrapping="Wrap" />
+                        </StackPanel>
+                    </ui:Card>
+
+                    <ui:Card Margin="5">
+                        <StackPanel Margin="16,8">
+                            <TextBlock Text="设备" FontSize="12" Opacity="0.62" />
+                            <TextBlock x:Name="CardDeviceValue" Text="—" FontSize="23" FontWeight="SemiBold"
+                                       Margin="0,3,0,0" TextTrimming="CharacterEllipsis" />
+                            <TextBlock x:Name="CardDeviceDetail" Text="等待数据" FontSize="12" Opacity="0.62"
+                                       Margin="0,4,0,0" MinHeight="20" TextWrapping="Wrap" />
+                        </StackPanel>
+                    </ui:Card>
+                </UniformGrid>
+
+                <ui:Card Margin="5,6,5,0">
+                    <StackPanel Margin="16,8">
+                        <TextBlock Text="温度 / 信号历史" FontSize="14" FontWeight="SemiBold" />
+                        <controls:HistoryChart x:Name="Chart" Height="108" Margin="0,4,0,0" />
+                    </StackPanel>
+                </ui:Card>
+
+                <ui:Card Margin="5,6,5,0">
+                    <Grid Margin="16,7">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" Text="电脑热点" FontSize="14" FontWeight="SemiBold" VerticalAlignment="Center" />
+                        <TextBlock Grid.Column="1" x:Name="PcHotspotStateText" Text="—" FontSize="14"
+                                   FontWeight="SemiBold" Margin="18,0,0,0" VerticalAlignment="Center" />
+                        <TextBlock Grid.Column="2" x:Name="PcHotspotDetailText" Text="读取中…" FontSize="12"
+                                   Opacity="0.62" Margin="14,0,10,0" VerticalAlignment="Center"
+                                   TextTrimming="CharacterEllipsis" />
+                        <ui:ToggleSwitch Grid.Column="3" x:Name="PcHotspotSwitch" Content="开启热点"
+                                         IsEnabled="False" Click="PcHotspotSwitch_Click" />
+                    </Grid>
+                </ui:Card>
+
+                <ui:Card Margin="5,6,5,0">
+                    <Grid Margin="16,7">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" Text="近期短信" FontSize="14" FontWeight="SemiBold" VerticalAlignment="Center" />
+                        <TextBlock Grid.Column="1" x:Name="SmsPreviewText" Text="监听中 · 本次运行期间暂无新短信"
+                                   FontSize="12" Opacity="0.7" Margin="18,0,10,0" VerticalAlignment="Center"
+                                   TextTrimming="CharacterEllipsis" />
+                        <ui:Button Grid.Column="2" x:Name="OpenSmsButton" Content="查看列表"
+                                   Appearance="Secondary" Padding="16,6" Click="OpenSmsButton_Click" />
+                    </Grid>
+                </ui:Card>
+
+                <Grid Margin="5,6,5,0">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+                    <TextBlock Grid.Column="0" x:Name="UpdatedText" Text="尚未采集" FontSize="12" Opacity="0.62" />
+                    <TextBlock Grid.Column="1" x:Name="TetherStatusText" Text="" FontSize="12" Opacity="0.7"
+                               HorizontalAlignment="Right" TextTrimming="CharacterEllipsis" Margin="20,0,0,0" />
+                </Grid>
+            </StackPanel>
+        </ScrollViewer>
+    </Grid>
+</ui:FluentWindow>

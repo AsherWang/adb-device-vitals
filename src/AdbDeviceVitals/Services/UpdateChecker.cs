@@ -4,10 +4,12 @@ using System.Globalization;
 using System.IO;
 using System.IO.Compression;
 using System.Net;
+using System.Net.Http;
 using System.Reflection;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace AdbDeviceVitals.Services
@@ -51,6 +53,18 @@ namespace AdbDeviceVitals.Services
         private const string Repository = "AsherWang/adb-device-vitals";
         private const string LatestReleaseUrl = "https://api.github.com/repos/" + Repository + "/releases/latest";
         private const int MaxPackageBytes = 30 * 1024 * 1024;
+        private static readonly HttpClient Client = CreateClient();
+
+        private static HttpClient CreateClient()
+        {
+            HttpClientHandler handler = new HttpClientHandler
+            {
+                AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate
+            };
+            HttpClient client = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
+            client.DefaultRequestHeaders.UserAgent.ParseAdd("AdbDeviceVitals");
+            return client;
+        }
 
         public static Version CurrentVersion
         {
@@ -133,7 +147,8 @@ namespace AdbDeviceVitals.Services
         public static void OpenReleasePage(string releasePage)
         {
             if (string.IsNullOrWhiteSpace(releasePage)) return;
-            Process.Start(releasePage);
+            // .NET Core 起 Process.Start(string) 默认不走 Shell，打开 URL 必须显式指定。
+            Process.Start(new ProcessStartInfo(releasePage) { UseShellExecute = true });
         }
 
         private static UpdateCheckResult Check()
@@ -272,48 +287,41 @@ namespace AdbDeviceVitals.Services
 
         private static void EnsureTls()
         {
-            ServicePointManager.Expect100Continue = false;
-            ServicePointManager.SecurityProtocol |= (SecurityProtocolType)3072;
+            // .NET 10 的 HttpClient 默认使用系统 TLS 策略，不再需要手动设置 SecurityProtocol。
         }
 
         private static string DownloadString(string url, int timeoutMs)
         {
-            HttpWebRequest request = CreateRequest(url, timeoutMs);
-            using (HttpWebResponse response = (HttpWebResponse)request.GetResponse())
-            using (Stream stream = response.GetResponseStream())
-            using (StreamReader reader = new StreamReader(stream, Encoding.UTF8))
+            using (CancellationTokenSource cancellation = new CancellationTokenSource(timeoutMs))
+            using (HttpResponseMessage response = Client.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, cancellation.Token)
+                .GetAwaiter().GetResult())
             {
-                return reader.ReadToEnd();
+                response.EnsureSuccessStatusCode();
+                return response.Content.ReadAsStringAsync(cancellation.Token).GetAwaiter().GetResult();
             }
         }
 
         private static void DownloadFile(string url, string path, int timeoutMs)
         {
-            HttpWebRequest request = CreateRequest(url, timeoutMs);
-            using (HttpWebResponse response = (HttpWebResponse)request.GetResponse())
-            using (Stream input = response.GetResponseStream())
-            using (FileStream output = new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.None))
+            using (CancellationTokenSource cancellation = new CancellationTokenSource(timeoutMs))
+            using (HttpResponseMessage response = Client.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, cancellation.Token)
+                .GetAwaiter().GetResult())
             {
-                byte[] buffer = new byte[81920];
-                int total = 0;
-                int read;
-                while ((read = input.Read(buffer, 0, buffer.Length)) > 0)
+                response.EnsureSuccessStatusCode();
+                using (Stream input = response.Content.ReadAsStreamAsync(cancellation.Token).GetAwaiter().GetResult())
+                using (FileStream output = new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.None))
                 {
-                    total += read;
-                    if (total > MaxPackageBytes) throw new InvalidOperationException("更新包过大。");
-                    output.Write(buffer, 0, read);
+                    byte[] buffer = new byte[81920];
+                    int total = 0;
+                    int read;
+                    while ((read = input.Read(buffer, 0, buffer.Length)) > 0)
+                    {
+                        total += read;
+                        if (total > MaxPackageBytes) throw new InvalidOperationException("更新包过大。");
+                        output.Write(buffer, 0, read);
+                    }
                 }
             }
-        }
-
-        private static HttpWebRequest CreateRequest(string url, int timeoutMs)
-        {
-            HttpWebRequest request = (HttpWebRequest)WebRequest.Create(url);
-            request.UserAgent = "AdbDeviceVitals";
-            request.Timeout = timeoutMs;
-            request.ReadWriteTimeout = timeoutMs;
-            request.AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate;
-            return request;
         }
 
         private static string ComputeSha256(string path)

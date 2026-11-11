@@ -3,51 +3,39 @@ $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path
 & (Join-Path $root 'build.ps1')
 
-$compiler = Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319\csc.exe'
-if (-not (Test-Path -LiteralPath $compiler)) {
-    $compiler = Join-Path $env:WINDIR 'Microsoft.NET\Framework\v4.0.30319\csc.exe'
+$dotnet = $null
+$candidate = Join-Path $env:USERPROFILE '.dotnet\dotnet.exe'
+if (Test-Path -LiteralPath $candidate) {
+    $sdks = @(& $candidate --list-sdks 2>$null)
+    if ($LASTEXITCODE -eq 0 -and $sdks.Count -gt 0) { $dotnet = $candidate }
+}
+if (-not $dotnet) { $dotnet = (Get-Command dotnet -ErrorAction SilentlyContinue).Source }
+if (-not $dotnet) { throw '.NET 10 SDK not found.' }
+
+$env:DOTNET_CLI_TELEMETRY_OPTOUT = '1'
+$env:DOTNET_NOLOGO = '1'
+
+# Pure logic tests: links the service/parser sources into a standalone console app.
+$testOutput = Join-Path $root 'tests\bin\Release\net10.0-windows10.0.19041.0'
+& $dotnet build (Join-Path $root 'tests\AdbDeviceVitals.Tests.csproj') -c Release -tl:off | Out-Null
+if ($LASTEXITCODE -ne 0) { throw "Test project build failed with exit code $LASTEXITCODE." }
+& $dotnet (Join-Path $testOutput 'ParserTests.dll')
+if ($LASTEXITCODE -ne 0) { throw "Parser tests failed with exit code $LASTEXITCODE." }
+
+# Render smoke: real WPF windows with sample data, three PNG screenshots.
+$artifacts = Join-Path $root 'artifacts'
+New-Item -ItemType Directory -Force -Path $artifacts | Out-Null
+# New names avoid stale WinForms screenshots being mistaken for fresh output.
+$mainPng = Join-Path $artifacts 'wpf-main.png'
+$settingsPng = Join-Path $artifacts 'wpf-settings.png'
+$smsPng = Join-Path $artifacts 'wpf-sms.png'
+
+& $dotnet build (Join-Path $root 'tests\AdbDeviceVitals.RenderTest.csproj') -c Release -tl:off | Out-Null
+if ($LASTEXITCODE -ne 0) { throw "Render project build failed with exit code $LASTEXITCODE." }
+& $dotnet (Join-Path $testOutput 'RenderSmokeTest.dll') $mainPng $settingsPng $smsPng
+if ($LASTEXITCODE -ne 0) { throw "Render smoke test failed with exit code $LASTEXITCODE." }
+foreach ($png in @($mainPng, $settingsPng, $smsPng)) {
+    if (-not (Test-Path -LiteralPath $png)) { throw "Missing render output: $png" }
 }
 
-$app = Join-Path $root 'src\AdbDeviceVitals\bin\Release\AdbDeviceVitals.exe'
-$testOutput = Join-Path $root 'artifacts\tests'
-$testExe = Join-Path $testOutput 'ParserTests.exe'
-New-Item -ItemType Directory -Force -Path $testOutput | Out-Null
-
-& $compiler /nologo /target:exe /platform:anycpu /codepage:65001 `
-    /out:$testExe `
-    /reference:System.dll `
-    /reference:System.Core.dll `
-    /reference:$app `
-    (Join-Path $root 'tests\ParserTests.cs')
-
-if ($LASTEXITCODE -ne 0) {
-    throw "Test compilation failed with exit code $LASTEXITCODE."
-}
-
-Copy-Item -LiteralPath $app -Destination $testOutput -Force
-& $testExe
-if ($LASTEXITCODE -ne 0) {
-    throw "Tests failed with exit code $LASTEXITCODE."
-}
-
-$renderExe = Join-Path $testOutput 'RenderSmokeTest.exe'
-$renderPng = Join-Path $root 'artifacts\ui-smoke.png'
-& $compiler /nologo /target:exe /platform:anycpu /codepage:65001 `
-    /out:$renderExe `
-    /reference:System.dll `
-    /reference:System.Core.dll `
-    /reference:System.Drawing.dll `
-    /reference:System.Windows.Forms.dll `
-    /reference:$app `
-    (Join-Path $root 'tests\RenderSmokeTest.cs')
-
-if ($LASTEXITCODE -ne 0) {
-    throw "Render test compilation failed with exit code $LASTEXITCODE."
-}
-
-& $renderExe $renderPng
-if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $renderPng)) {
-    throw 'Render smoke test failed.'
-}
-Write-Output "Rendered: $renderPng"
-
+Write-Output "Rendered: $mainPng, $settingsPng, $smsPng"

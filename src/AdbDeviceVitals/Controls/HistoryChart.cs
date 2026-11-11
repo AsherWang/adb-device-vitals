@@ -1,104 +1,106 @@
 using System;
 using System.Collections.Generic;
-using System.Drawing;
-using System.Drawing.Drawing2D;
 using System.Globalization;
-using System.Windows.Forms;
+using System.Windows;
+using System.Windows.Media;
 
 namespace AdbDeviceVitals.Controls
 {
-    public sealed class HistoryChart : Control
+    /// <summary>
+    /// 温度 / 信号历史曲线。WinForms 版本是 Control + GDI+，这里改成 WPF
+    /// FrameworkElement + DrawingContext，采样上限和双轴计算保持一致。
+    /// 颜色收敛到低饱和的一主一辅，避免旧的荧光黄 / 亮青抢视觉。
+    /// </summary>
+    public sealed class HistoryChart : FrameworkElement
     {
+        private static readonly Brush TemperatureBrush = CreateBrush(0xC2, 0x6A, 0x12);
+        private static readonly Brush SignalBrush = CreateBrush(0x00, 0x67, 0xC0);
+        private static readonly Brush GridBrush = CreateBrush(0xE3, 0xE3, 0xE3);
+        private static readonly Brush LabelBrush = CreateBrush(0x6E, 0x6E, 0x6E);
+        private static readonly Pen GridPen = CreatePen(GridBrush, 1, null);
+        private static readonly Pen TemperaturePen = CreatePen(TemperatureBrush, 2, null);
+        private static readonly Pen SignalPen = CreatePen(SignalBrush, 1.5, new DashStyle(new double[] { 4, 3 }, 0));
+
         private readonly List<ChartSample> _samples = new List<ChartSample>();
-        private readonly Font _captionFont = new Font("Segoe UI", 8.5f, FontStyle.Regular);
+        private readonly Typeface _typeface = new Typeface(new FontFamily("Segoe UI"),
+            FontStyles.Normal, FontWeights.Normal, FontStretches.Normal);
 
         public HistoryChart()
         {
-            DoubleBuffered = true;
-            BackColor = Color.FromArgb(24, 30, 39);
-            ForeColor = Color.FromArgb(188, 198, 210);
-            SetStyle(ControlStyles.ResizeRedraw, true);
+            MinHeight = 100;
+            ClipToBounds = true;
         }
 
         public void AddSample(double? temperature, int? signal)
         {
             _samples.Add(new ChartSample(temperature, signal));
             while (_samples.Count > 180) _samples.RemoveAt(0);
-            Invalidate();
+            InvalidateVisual();
         }
 
-        protected override void OnPaint(PaintEventArgs e)
+        protected override void OnRender(DrawingContext drawing)
         {
-            base.OnPaint(e);
-            Graphics g = e.Graphics;
-            g.SmoothingMode = SmoothingMode.AntiAlias;
-            Rectangle plot = new Rectangle(42, 20, Math.Max(10, Width - 58), Math.Max(10, Height - 42));
+            base.OnRender(drawing);
+
+            double width = RenderSize.Width;
+            double height = RenderSize.Height;
+            if (width < 80 || height < 60) return;
+
+            // 顶部留出两行：第一行图例，第二行左/右轴最大值，避免文字叠在一起。
+            Rect plot = new Rect(42, 32, Math.Max(10, width - 58), Math.Max(10, height - 54));
             AxisRange temperatureAxis = CalculateAxis(true);
             AxisRange signalAxis = CalculateAxis(false);
 
-            using (Pen grid = new Pen(Color.FromArgb(47, 56, 68)))
+            for (int i = 0; i <= 4; i++)
             {
-                for (int i = 0; i <= 4; i++)
-                {
-                    int y = plot.Top + (plot.Height * i / 4);
-                    g.DrawLine(grid, plot.Left, y, plot.Right, y);
-                }
+                double y = plot.Top + plot.Height * i / 4;
+                drawing.DrawLine(GridPen, new Point(plot.Left, y), new Point(plot.Right, y));
             }
 
-            g.DrawString(FormatAxisValue(temperatureAxis.Maximum, true), _captionFont, Brushes.Gray, 8, plot.Top - 6);
-            g.DrawString(FormatAxisValue(temperatureAxis.Minimum, true), _captionFont, Brushes.Gray, 8, plot.Bottom - 10);
-            DrawRightAxisLabel(g, plot, FormatAxisValue(signalAxis.Maximum, false), plot.Top - 6);
-            DrawRightAxisLabel(g, plot, FormatAxisValue(signalAxis.Minimum, false), plot.Bottom - 10);
+            DrawText(drawing, FormatAxisValue(temperatureAxis.Maximum, true), LabelBrush, 8, plot.Top - 14);
+            DrawText(drawing, FormatAxisValue(temperatureAxis.Minimum, true), LabelBrush, 8, plot.Bottom - 2);
+            DrawRightLabel(drawing, plot, FormatAxisValue(signalAxis.Maximum, false), plot.Top - 14);
+            DrawRightLabel(drawing, plot, FormatAxisValue(signalAxis.Minimum, false), plot.Bottom - 2);
 
-            DrawSeries(g, plot, true, temperatureAxis, Color.FromArgb(255, 174, 66), false);
-            DrawSeries(g, plot, false, signalAxis, Color.FromArgb(61, 205, 255), true);
-            using (Brush temperatureBrush = new SolidBrush(Color.FromArgb(255, 174, 66)))
-            using (Brush signalBrush = new SolidBrush(Color.FromArgb(61, 205, 255)))
-            {
-                g.DrawString("温度", _captionFont, temperatureBrush, 10, 2);
-                g.DrawString("信号", _captionFont, signalBrush, 55, 2);
-            }
+            DrawSeries(drawing, plot, true, temperatureAxis, TemperaturePen, TemperatureBrush, false);
+            DrawSeries(drawing, plot, false, signalAxis, SignalPen, SignalBrush, true);
+
+            DrawText(drawing, "温度", TemperatureBrush, 10, 2);
+            DrawText(drawing, "信号", SignalBrush, 52, 2);
         }
 
-        private void DrawSeries(Graphics g, Rectangle plot, bool temperature, AxisRange axis, Color color, bool dashed)
+        private void DrawSeries(DrawingContext drawing, Rect plot, bool temperature, AxisRange axis,
+            Pen pen, Brush marker, bool hollowMarker)
         {
             if (_samples.Count < 2) return;
-            List<PointF> points = new List<PointF>();
+            List<Point> points = new List<Point>();
             for (int i = 0; i < _samples.Count; i++)
             {
-                double? value = temperature ? _samples[i].Temperature : (_samples[i].Signal.HasValue ? (double?)_samples[i].Signal.Value : null);
+                double? value = temperature
+                    ? _samples[i].Temperature
+                    : (_samples[i].Signal.HasValue ? (double?)_samples[i].Signal.Value : null);
                 if (!value.HasValue) continue;
                 double normalized = Math.Max(0, Math.Min(1, (value.Value - axis.Minimum) / (axis.Maximum - axis.Minimum)));
-                float x = plot.Left + (float)i / Math.Max(1, _samples.Count - 1) * plot.Width;
-                float y = plot.Bottom - (float)normalized * plot.Height;
-                points.Add(new PointF(x, y));
+                double x = plot.Left + i / (double)Math.Max(1, _samples.Count - 1) * plot.Width;
+                double y = plot.Bottom - normalized * plot.Height;
+                points.Add(new Point(x, y));
             }
-            if (points.Count >= 2)
-            {
-                using (Pen pen = new Pen(color, temperature ? 3f : 2f))
-                {
-                    pen.LineJoin = LineJoin.Round;
-                    if (dashed)
-                    {
-                        pen.DashStyle = DashStyle.Dash;
-                        pen.DashCap = DashCap.Round;
-                        pen.DashPattern = new float[] { 4f, 3f };
-                    }
-                    g.DrawLines(pen, points.ToArray());
-                }
+            if (points.Count < 2) return;
 
-                PointF latest = points[points.Count - 1];
-                if (temperature)
-                {
-                    using (Brush marker = new SolidBrush(color))
-                        g.FillEllipse(marker, latest.X - 3.5f, latest.Y - 3.5f, 7f, 7f);
-                }
-                else
-                {
-                    using (Pen marker = new Pen(color, 1.5f))
-                        g.DrawRectangle(marker, latest.X - 4f, latest.Y - 4f, 8f, 8f);
-                }
+            StreamGeometry geometry = new StreamGeometry();
+            using (StreamGeometryContext context = geometry.Open())
+            {
+                context.BeginFigure(points[0], false, false);
+                for (int i = 1; i < points.Count; i++) context.LineTo(points[i], true, false);
             }
+            geometry.Freeze();
+            drawing.DrawGeometry(null, pen, geometry);
+
+            Point latest = points[points.Count - 1];
+            if (hollowMarker)
+                drawing.DrawRectangle(null, new Pen(marker, 1.5), new Rect(latest.X - 3.5, latest.Y - 3.5, 7, 7));
+            else
+                drawing.DrawEllipse(marker, null, latest, 3.5, 3.5);
         }
 
         private AxisRange CalculateAxis(bool temperature)
@@ -108,7 +110,9 @@ namespace AdbDeviceVitals.Controls
             int count = 0;
             foreach (ChartSample sample in _samples)
             {
-                double? value = temperature ? sample.Temperature : (sample.Signal.HasValue ? (double?)sample.Signal.Value : null);
+                double? value = temperature
+                    ? sample.Temperature
+                    : (sample.Signal.HasValue ? (double?)sample.Signal.Value : null);
                 if (!value.HasValue) continue;
                 minimum = Math.Min(minimum, value.Value);
                 maximum = Math.Max(maximum, value.Value);
@@ -130,10 +134,18 @@ namespace AdbDeviceVitals.Controls
             return new AxisRange(minimum - padding, maximum + padding);
         }
 
-        private void DrawRightAxisLabel(Graphics graphics, Rectangle plot, string text, float y)
+        private void DrawText(DrawingContext drawing, string text, Brush brush, double x, double y)
         {
-            SizeF size = graphics.MeasureString(text, _captionFont);
-            graphics.DrawString(text, _captionFont, Brushes.Gray, plot.Right - size.Width, y);
+            FormattedText formatted = new FormattedText(text, CultureInfo.CurrentUICulture,
+                FlowDirection.LeftToRight, _typeface, 11, brush, 1.0);
+            drawing.DrawText(formatted, new Point(x, y));
+        }
+
+        private void DrawRightLabel(DrawingContext drawing, Rect plot, string text, double y)
+        {
+            FormattedText formatted = new FormattedText(text, CultureInfo.CurrentUICulture,
+                FlowDirection.LeftToRight, _typeface, 11, LabelBrush, 1.0);
+            drawing.DrawText(formatted, new Point(plot.Right - formatted.Width, y));
         }
 
         private static string FormatAxisValue(double value, bool temperature)
@@ -141,24 +153,36 @@ namespace AdbDeviceVitals.Controls
             return value.ToString(temperature ? "0.0'°'" : "0.#", CultureInfo.InvariantCulture);
         }
 
-        protected override void Dispose(bool disposing)
+        private static Brush CreateBrush(byte r, byte g, byte b)
         {
-            if (disposing) _captionFont.Dispose();
-            base.Dispose(disposing);
+            Brush brush = new SolidColorBrush(Color.FromRgb(r, g, b));
+            brush.Freeze();
+            return brush;
+        }
+
+        private static Pen CreatePen(Brush brush, double thickness, DashStyle dash)
+        {
+            Pen pen = new Pen(brush, thickness) { LineJoin = PenLineJoin.Round };
+            if (dash != null) pen.DashStyle = dash;
+            pen.Freeze();
+            return pen;
         }
 
         private sealed class ChartSample
         {
             public double? Temperature { get; private set; }
             public int? Signal { get; private set; }
-            public ChartSample(double? temperature, int? signal) { Temperature = temperature; Signal = signal; }
+            public ChartSample(double? temperature, int? signal)
+            {
+                Temperature = temperature;
+                Signal = signal;
+            }
         }
 
         private sealed class AxisRange
         {
             public double Minimum { get; private set; }
             public double Maximum { get; private set; }
-
             public AxisRange(double minimum, double maximum)
             {
                 Minimum = minimum;
@@ -167,4 +191,3 @@ namespace AdbDeviceVitals.Controls
         }
     }
 }
-

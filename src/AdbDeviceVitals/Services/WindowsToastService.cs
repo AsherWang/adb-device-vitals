@@ -1,12 +1,14 @@
 using System;
-using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Security;
+using Windows.Data.Xml.Dom;
+using Windows.UI.Notifications;
 
 namespace AdbDeviceVitals.Services
 {
     /// <summary>
-    /// Windows 通知中心样式的提醒。项目是单 exe、零 NuGet，靠反射调用 WinRT：
+    /// Windows 通知中心样式的提醒。迁移到 .NET 10 之后改用 Windows SDK 投影
+    /// （CsWinRT）的强类型 Toast API，不再依赖 ContentType=WindowsRuntime 反射。
     /// 不做点击激活（那需要注册 COM 激活器），只负责把「收到几条新短信」送进通知中心。
     ///
     /// 未打包的桌面程序需要显式 AppUserModelID；某些系统策略下 Toast 会创建失败。
@@ -20,11 +22,7 @@ namespace AdbDeviceVitals.Services
         private static bool _appIdPrepared;
         private static bool _initialized;
         private static bool _unavailable;
-        private static Type _toastType;
-        private static Type _xmlType;
-        private static MethodInfo _loadXml;
-        private static MethodInfo _show;
-        private static object _notifier;
+        private static ToastNotifier _notifier;
 
         [DllImport("shell32.dll", CharSet = CharSet.Unicode, PreserveSig = true)]
         private static extern int SetCurrentProcessExplicitAppUserModelID(string appId);
@@ -52,7 +50,7 @@ namespace AdbDeviceVitals.Services
                     try
                     {
                         if (!_initialized) Initialize();
-                        return !_unavailable;
+                        return !_unavailable && _notifier != null;
                     }
                     catch
                     {
@@ -72,12 +70,11 @@ namespace AdbDeviceVitals.Services
                 try
                 {
                     if (!_initialized) Initialize();
-                    if (_unavailable) return false;
+                    if (_unavailable || _notifier == null) return false;
 
-                    object xml = Activator.CreateInstance(_xmlType);
-                    _loadXml.Invoke(xml, new object[] { BuildToastXml(title, message) });
-                    object toast = Activator.CreateInstance(_toastType, new object[] { xml });
-                    _show.Invoke(_notifier, new object[] { toast });
+                    XmlDocument xml = new XmlDocument();
+                    xml.LoadXml(BuildToastXml(title, message));
+                    _notifier.Show(new ToastNotification(xml));
                     return true;
                 }
                 catch
@@ -93,41 +90,7 @@ namespace AdbDeviceVitals.Services
             _initialized = true;
             PrepareAppId();
             if (_unavailable) return;
-
-            Type managerType = Type.GetType(
-                "Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType=WindowsRuntime", true);
-            _toastType = Type.GetType(
-                "Windows.UI.Notifications.ToastNotification, Windows.UI.Notifications, ContentType=WindowsRuntime", true);
-            _xmlType = Type.GetType(
-                "Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom, ContentType=WindowsRuntime", true);
-            _loadXml = FindMethod(_xmlType, "LoadXml", 1, false);
-
-            MethodInfo create = null;
-            foreach (MethodInfo method in managerType.GetMethods(BindingFlags.Public | BindingFlags.Static))
-            {
-                if (method.Name == "CreateToastNotifier" && method.GetParameters().Length == 1)
-                {
-                    create = method;
-                    break;
-                }
-            }
-            if (create == null) throw new MissingMethodException("ToastNotificationManager.CreateToastNotifier");
-
-            _notifier = create.Invoke(null, new object[] { AppUserModelId });
-            // 运行时对象是 __ComObject，方法要从声明的返回类型上找（与热点服务的坑一样）。
-            _show = FindMethod(create.ReturnType, "Show", 1, false);
-        }
-
-        private static MethodInfo FindMethod(Type type, string name, int parameterCount, bool isStatic)
-        {
-            BindingFlags flags = BindingFlags.Public | (isStatic ? BindingFlags.Static : BindingFlags.Instance);
-            foreach (MethodInfo method in type.GetMethods(flags))
-            {
-                if (method.Name != name) continue;
-                if (method.GetParameters().Length != parameterCount) continue;
-                return method;
-            }
-            throw new MissingMethodException(type.Name + "." + name);
+            _notifier = ToastNotificationManager.CreateToastNotifier(AppUserModelId);
         }
 
         private static string BuildToastXml(string title, string message)

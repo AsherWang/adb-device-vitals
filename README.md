@@ -2,7 +2,7 @@
 
 一个轻量的 Windows 托盘工具，通过 ADB 在本机查看 Android 设备的关键状态。
 
-[下载最新版 Windows 便携包](https://github.com/AsherWang/adb-device-vitals/releases/latest/download/AdbDeviceVitals-win-x64.zip)
+[下载最新版 Windows 便携包](https://github.com/AsherWang/adb-device-vitals/releases/latest/download/AdbDeviceVitals-win-x64.zip)（需先安装 [Microsoft Windows Desktop Runtime 10 (x64)](https://dotnet.microsoft.com/download/dotnet/10.0/runtime)）
 
 ## 使用场景
 
@@ -38,9 +38,20 @@
 
 所有数据均通过本机 ADB 读取。程序不会上传数据，也不会保存 ADB 原始输出、IMEI、MEID 或基站标识；短信正文只保留在内存中，不落盘，且默认不在界面上显示。
 
+## 界面与技术栈
+
+界面已整体迁移到 **WPF + .NET 10 + WPF-UI 4.3.0**，对齐 Windows 11「设置」的观感：`FluentWindow` + Mica 背景、卡片式分组、`ToggleSwitch`、侧栏导航，主面板 / 设置 / 近期短信三个窗口共用一套浅色主题。
+
+- 目标框架 `net10.0-windows10.0.19041.0`，SDK-style 工程（`UseWPF` + `UseWindowsForms`）。托盘图标仍用 WinForms 的 `NotifyIcon`，WPF-UI 没有提供托盘控件。
+- 系统 API 改为 CsWinRT 强类型调用：`NetworkOperatorTetheringManager` 管电脑热点，`Windows.UI.Notifications` 发 Toast，不再靠 WinRT 反射。
+- 历史曲线 `Controls/HistoryChart.cs` 改为 WPF `FrameworkElement` + `DrawingContext`。
+- 采集、配置、短信、守护、多设备仲裁等业务逻辑与之前的 WinForms 版本保持一致，迁移只换 UI 与系统 API 层。
+- 设置页左侧导航是自绘的单选按钮栏：WPF-UI 的 `NavigationView` 会自带一块内容区，塞进窄侧栏时菜单文字会被裁掉。
+
 ## 运行要求
 
-- Windows 10 或 Windows 11
+- Windows 10（1809 / 内部版本 19041 或更高）或 Windows 11，x64
+- **Microsoft Windows Desktop Runtime 10 (x64)**：发布包是框架依赖的单文件 exe，不含运行时。没装时 Windows 会弹窗提示下载，也可以从上面的链接手动安装
 - Android 手机已开启 USB 调试，并授权当前电脑
 - ADB 已加入 PATH，或位于以下常见位置之一：
   - 程序目录
@@ -94,7 +105,7 @@
 
 主窗口底部单独有一行「电脑热点」，控制的是 **Windows 自带的移动热点**，也就是「设置 → 网络和 Internet → 移动热点」那个开关。它和上面「网络共享」卡片不是同一件事：那张卡片读的是**手机侧**的共享状态（`dumpsys tethering` / `dumpsys wifi`），这一行反映的是**电脑侧**有没有把网络发给别人。
 
-实现方式与设置里的开关完全一致，都是 WinRT 的 `NetworkOperatorTetheringManager`，所以：
+实现方式与设置里的开关完全一致，都是 CsWinRT 强类型调用的 `Windows.Networking.NetworkOperators.NetworkOperatorTetheringManager`，所以：
 
 - 使用的是系统里已经配置好的热点名称和密码，程序不会去改它们；
 - 热点由 Windows 的 ICS 服务提供，客户端会拿到 `192.168.137.x` 网段的地址；
@@ -119,7 +130,7 @@ USB 网络共享切换后网卡会重新枚举，Windows 还要做一轮连通�
 - **发件人过滤**：设置里的「只提醒这些发件人」填关键字（逗号、分号、竖线或空格分隔），留空表示全部。它只决定要不要弹提醒，**不决定收不收短信**，列表始终保留全部消息。
 - **提醒方式**：默认用 Windows 通知中心样式的 Toast；系统不支持（未注册 AppUserModelID、策略限制等）会自动回退到托盘气泡，设置里也能关掉这个开关。提醒文案只有数量、发件人和「含验证码」，绝不带正文或码值。Toast 不支持点击直接打开列表，请用托盘菜单。
 - **隐私边界**：短信只存在内存里，最多保留最近 100 条；不写 CSV、不写 `tether.log`、不落盘、不上传，也不读取历史短信库。「复制正文 / 复制验证码」会把明文放进 Windows 剪贴板，Toast 会留在 Windows 通知中心历史里，介意就别用这两处。
-- **实现**：走 `adb shell content query --uri content://sms/inbox`，不需要 Root、不在手机装 App、没有新增依赖。`body` 放在 `--projection` 最后一项，按 `Row:` 分段合并，正文里的逗号、等号和换行都不会被截断。
+- **实现**：走 `adb shell content query --uri content://sms/inbox`，不需要 Root、不在手机装 App；短信通道本身不引入额外依赖（UI 用的 WPF-UI 与它无关）。`body` 放在 `--projection` 最后一项，按 `Row:` 分段合并，正文里的逗号、等号和换行都不会被截断。
 - **权限**：部分 ROM 会拒绝 shell 读取短信（输出 `Permission Denial` / `READ_SMS`）。这类失败不会被静默当成「没有新短信」：主窗口底部显示原因、托盘提示一次。此时需要在开发者选项里打开「USB 调试（安全设置）」，或执行 `adb shell appops set com.android.shell READ_SMS allow`。
 - **实时性**：10 秒轮询，不是推送。USB 重枚举期间可能漏，靠下一次查询补上（只补本次运行期间、基线之后的）。要亚秒级推送得在手机装 App 监听 `SMS_RECEIVED`，与本项目「不装客户端」的原则冲突，暂不做。
 
@@ -145,19 +156,25 @@ USB 网络共享切换后网卡会重新枚举，Windows 还要做一轮连通�
 
 ## 构建
 
-仓库提供了不依赖 Visual Studio 的构建脚本。Windows 自带的 .NET Framework 编译器即可完成构建：
+需要 **.NET 10 SDK**（脚本会优先找 `%USERPROFILE%\.dotnet\dotnet.exe`，因为系统 PATH 上的 `dotnet.exe` 有时只是 host、没装 SDK）和 NuGet 还原 WPF-UI 4.3.0。不需要 Visual Studio。
 
 ```powershell
 .\build.ps1
 ```
 
-输出文件：`src\AdbDeviceVitals\bin\Release\AdbDeviceVitals.exe`
+`build.ps1` 用 `dotnet publish -p:PublishSingleFile=true -p:SelfContained=false` 生成**框架依赖的单文件 exe**：一个 `AdbDeviceVitals.exe` 里打包了托管 DLL 和 WPF-UI，运行时依赖系统里的 Desktop Runtime 10。输出位置 `src\AdbDeviceVitals\bin\Release\AdbDeviceVitals.exe`。
 
-运行解析测试：
+因此发布包与自更新流程不用改：zip 里仍然只有 exe + README + LICENSE，程序内更新只替换这一个 exe，配置留在 `%USERPROFILE%\adb-device-vitals\settings.json`，不受影响。
+
+跑完整验证（构建 + 逻辑单测 + 三个窗口的真实渲染截图）：
 
 ```powershell
 .\test.ps1
 ```
+
+- 逻辑测试：`tests\AdbDeviceVitals.Tests.csproj`，链接解析器 / 状态机等纯逻辑源码，输出 `All parser tests passed.`
+- 渲染测试：`tests\AdbDeviceVitals.RenderTest.csproj`，在真实 `Application.Run()` 消息循环里显示三个窗口，用 Win32 `GetWindowRect` + `Graphics.CopyFromScreen` 截图（WPF 的 `RenderTargetBitmap` 截不到 DWM 画的 Mica 背景）。产物：`artifacts\wpf-main.png`、`artifacts\wpf-settings.png`、`artifacts\wpf-sms.png`。
+- CI 发布：`.github\workflows\release.yml` 在推 `v*` 标签时先用 `actions/setup-dotnet@v4` 装 .NET 10 SDK，再执行同一个 `.\build.ps1`。
 
 ## 数据兼容性
 
