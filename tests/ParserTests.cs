@@ -16,6 +16,7 @@ internal static class ParserTests
         UsbTethering();
         NetworkStats();
         DeviceSelectionTests();
+        SettingsFileTests();
         Updates();
         Console.WriteLine(_failed == 0 ? "All parser tests passed." : _failed + " parser test(s) failed.");
         return _failed == 0 ? 0 : 1;
@@ -164,6 +165,59 @@ internal static class ParserTests
         Equal(false, DeviceSelection.IsValidSerial(string.Empty), "empty serial rejected");
         Equal("01234567…EF00", DeviceSelection.ShortSerial("0123456789ABCDEF00"), "short serial");
         Equal("0123456789ABCDEF", DeviceSelection.ShortSerial("0123456789ABCDEF"), "short serial keeps 16 chars");
+    }
+
+    private static void SettingsFileTests()
+    {
+        // 完整往返：路径里的反斜杠、引号和中文都必须原样回来。
+        SettingsData original = new SettingsData
+        {
+            Schema = 2,
+            AdbDirectory = @"C:\工具\adb ""tools""\platform-tools",
+            TargetDeviceSerial = "b522a8f6",
+            RunAtStartup = true,
+            AutoEnableUsbTethering = true,
+            AutoStartPcHotspot = false,
+            LastUpdateCheckUtc = new DateTime(2026, 11, 8, 3, 0, 0, DateTimeKind.Utc)
+        };
+        string json = SettingsFile.Serialize(original);
+        SettingsData parsed = SettingsFile.Parse(json);
+        Equal(2, parsed.Schema, "settings schema");
+        Equal(original.AdbDirectory, parsed.AdbDirectory, "settings adb directory escaped");
+        Equal("b522a8f6", parsed.TargetDeviceSerial, "settings serial");
+        Equal(true, parsed.RunAtStartup, "settings run at startup");
+        Equal(true, parsed.AutoEnableUsbTethering, "settings auto usb tethering");
+        Equal(false, parsed.AutoStartPcHotspot, "settings auto hotspot");
+        Equal(original.LastUpdateCheckUtc.Value.ToString("o"),
+            parsed.LastUpdateCheckUtc.HasValue ? parsed.LastUpdateCheckUtc.Value.ToString("o") : null,
+            "settings update timestamp");
+
+        // 空文件 / 缺字段 / 未知字段：用默认值，不能被无关内容带偏。
+        SettingsData empty = SettingsFile.Parse("{}");
+        Equal(1, empty.Schema, "empty settings schema");
+        Equal(string.Empty, empty.AdbDirectory, "empty settings adb directory");
+        Equal(false, empty.RunAtStartup, "empty settings startup flag");
+        Equal(false, empty.LastUpdateCheckUtc.HasValue, "empty settings timestamp");
+        Equal(string.Empty, SettingsFile.Parse(string.Empty).TargetDeviceSerial, "null text is safe");
+        Equal(true, SettingsFile.Parse("{\"Unknown\": \"x\", \"RunAtStartup\": true}").RunAtStartup,
+            "unknown setting ignored");
+
+        // 写坏一项不能丢掉整份配置。
+        SettingsData broken = SettingsFile.Parse("{\"AutoStartPcHotspot\": true, broken");
+        Equal(true, broken.AutoStartPcHotspot, "tolerant parse keeps good fields");
+        Equal(false, SettingsFile.Parse("{\"RunAtStartup\": \"yes\"}").RunAtStartup,
+            "non-boolean value rejected");
+        Equal(false, SettingsFile.Parse("{\"LastUpdateCheckUtc\": \"nope\"}").LastUpdateCheckUtc.HasValue,
+            "bad timestamp ignored");
+        Equal(true, SettingsFile.Serialize(null).IndexOf("\"schema\": 1", StringComparison.Ordinal) >= 0,
+            "serialize null uses defaults");
+
+        // \u 转义与控制字符。
+        SettingsData unicode = SettingsFile.Parse("{\"TargetDeviceSerial\": \"ab\\u0063d\", \"AdbDirectory\": \"a\\tb\"}");
+        Equal("abcd", unicode.TargetDeviceSerial, "unicode escape");
+        Equal("a\tb", unicode.AdbDirectory, "tab escape");
+        Equal(true, SettingsFile.Serialize(unicode).IndexOf("a\\tb", StringComparison.Ordinal) >= 0,
+            "control character re-escaped");
     }
 
     private static void Equal(object expected, object actual, string name)

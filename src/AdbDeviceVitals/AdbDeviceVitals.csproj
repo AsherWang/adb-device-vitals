@@ -43,6 +43,7 @@
     <Compile Include="Services\DeviceMonitor.cs" />
     <Compile Include="Services\DeviceSelection.cs" />
     <Compile Include="Services\PcHotspotService.cs" />
+    <Compile Include="Services\SettingsFile.cs" />
     <Compile Include="Services\TetherLog.cs" />
     <Compile Include="Services\UpdateChecker.cs" />
     <Compile Include="Services\UsbTetheringService.cs" />

@@ -134,6 +134,9 @@ namespace AdbDeviceVitals
         {
             if (_backgroundStarted) return;
             _backgroundStarted = true;
+            string configError = AppSettings.LastError;
+            if (configError.Length > 0)
+                Notify("配置文件", "无法读取或写入配置文件，已临时使用默认设置：" + configError, ToolTipIcon.Warning);
             _timer.Start();
             if (_activationEvent != null) _activationTimer.Start();
             await RefreshSnapshot(true);
@@ -265,6 +268,8 @@ namespace AdbDeviceVitals
 
         private async Task OpenSettings()
         {
+            // 允许程序运行期间手改 settings.json，打开设置时重新读一次。
+            AppSettings.Reload();
             using (SettingsForm dialog = new SettingsForm(_adb, delegate(IWin32Window owner) { return CheckForUpdates(owner, true); }))
             {
                 if (dialog.ShowDialog(this) != DialogResult.OK || _exitingForUpdate) return;

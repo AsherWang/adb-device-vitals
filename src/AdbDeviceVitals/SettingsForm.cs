@@ -333,11 +333,16 @@ namespace AdbDeviceVitals
 
             try
             {
-                AppSettings.AdbDirectory = directory;
-                AppSettings.TargetDeviceSerial = serial;
-                AppSettings.AutoEnableUsbTethering = _autoEnableUsbTethering.Checked;
-                AppSettings.AutoStartPcHotspot = _autoStartPcHotspot.Checked;
-                AppSettings.RunAtStartup = _runAtStartup.Checked;
+                // 一次写入整份配置，避免五个属性各写一遍文件、留下中间状态。
+                AppSettings.Save(new SettingsData
+                {
+                    AdbDirectory = directory,
+                    TargetDeviceSerial = serial,
+                    AutoEnableUsbTethering = _autoEnableUsbTethering.Checked,
+                    AutoStartPcHotspot = _autoStartPcHotspot.Checked,
+                    RunAtStartup = _runAtStartup.Checked,
+                    LastUpdateCheckUtc = AppSettings.LastUpdateCheckUtc
+                });
                 DialogResult = DialogResult.OK;
                 Close();
             }

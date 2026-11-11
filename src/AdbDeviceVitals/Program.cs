@@ -23,6 +23,8 @@ namespace AdbDeviceVitals
                     return;
                 }
 
+                // 只读一次配置文件；后续轮询命中内存缓存，不会每 2.5 秒碰一次磁盘。
+                AppSettings.Initialize();
                 Application.EnableVisualStyles();
                 Application.SetCompatibleTextRenderingDefault(false);
                 Application.Run(new MainForm(activationEvent, IsStartupLaunch()));
