@@ -44,9 +44,34 @@
   - 程序目录
   - `%LOCALAPPDATA%\Android\Sdk\platform-tools`
 
-也可以在程序右上角打开“设置”，手动选择包含 `adb.exe` 的 `platform-tools` 目录。该设置保存在当前用户的注册表 `HKCU\Software\AdbDeviceVitals`，无需管理员权限。
+也可以在程序右上角打开“设置”，手动选择包含 `adb.exe` 的 `platform-tools` 目录。所有设置保存在用户主目录下的 `adb-device-vitals\settings.json`，无需管理员权限。
 
 程序不需要 Root，也不需要在手机安装客户端。
+
+## 配置文件
+
+所有设置保存在 `~/adb-device-vitals/settings.json`（Windows 上即 `%USERPROFILE%\adb-device-vitals\settings.json`），首次启动时自动创建。配置不跟着 exe 目录走，移动程序、用程序内更新替换 exe 都不会丢。
+
+```json
+{
+  "schema": 1,
+  "AdbDirectory": "",
+  "TargetDeviceSerial": "",
+  "RunAtStartup": false,
+  "AutoEnableUsbTethering": false,
+  "AutoStartPcHotspot": false,
+  "LastUpdateCheckUtc": null
+}
+```
+
+程序只在启动、打开设置和保存设置时读写文件；`DeviceMonitor` 每 2.5 秒的轮询读的是内存缓存，不会反复碰磁盘。写入时先写同目录临时文件再整体替换，避免留下半截 JSON。设置页保存后立即生效；程序运行时手改文件，下次打开设置会重新读取。
+
+从 0.0.6 及更早版本升级时，首次启动会把 `HKCU\Software\AdbDeviceVitals` 里的旧值迁移过来，并在旧键写一个 `MigratedTo` 标记，保证只迁移一次：之后删掉 `settings.json` 就等于重置，不会被旧值重新灌回。旧键的值保留不动，回滚到旧版本仍可用。某字段写坏了只影响那一项，其余配置照常读取。
+
+两处例外：
+
+- **开机自启**仍要写 `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`，那是 Windows 的启动登记机制，不是配置。开关的真值在 `settings.json` 里，程序启动时会按它校正登记路径。
+- CSV 日志与 `tether.log` 仍在 `%LOCALAPPDATA%\AdbDeviceVitals\logs`，没有跟着迁移。
 
 ## 电脑热点
 
@@ -73,7 +98,7 @@ USB 网络共享切换后网卡会重新枚举，Windows 还要做一轮连通�
 同时通过 ADB 连接多台手机时（例如一台用来供网、另一台只是插着调试），程序**不会默认拿列表里的第一台**。设置里新增「目标设备」下拉框：
 
 - 显示当前已授权设备列表，格式为 `型号（序列号）`，右侧「刷新列表」可重新读取 `adb devices`；
-- 选中的序列号保存在当前用户注册表 `HKCU\Software\AdbDeviceVitals\TargetDeviceSerial`；
+- 选中的序列号保存在 `settings.json` 的 `TargetDeviceSerial` 字段；
 - **状态采集和 USB 网络共享开关都以这台设备为准**，包括开机自动开启共享。自动共享会一直等目标设备出现，不会把命令发给旁边的另一台手机；
 - 选「自动选择（只连接一台时生效）」等于清空这个记录，回到只接一台手机时即插即用的行为。
 
