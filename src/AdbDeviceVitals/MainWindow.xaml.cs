@@ -293,7 +293,7 @@ namespace AdbDeviceVitals
                 if (!_smsErrorNotified)
                 {
                     Notify("短信同步", result.PermissionDenied
-                        ? "手机拒绝了 ADB 读取短信的权限，请查看主窗口底部提示。"
+                        ? "手机拒绝了 ADB 读取短信的权限，原因见主窗口「近期短信」一行。"
                         : result.Error, WF.ToolTipIcon.Warning);
                     _smsErrorNotified = true;
                 }

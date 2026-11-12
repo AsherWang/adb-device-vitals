@@ -131,7 +131,7 @@ USB 网络共享切换后网卡会重新枚举，Windows 还要做一轮连通�
 - **提醒方式**：默认用 Windows 通知中心样式的 Toast；系统不支持（未注册 AppUserModelID、策略限制等）会自动回退到托盘气泡，设置里也能关掉这个开关。提醒文案只有数量、发件人和「含验证码」，绝不带正文或码值。Toast 不支持点击直接打开列表，请用托盘菜单。
 - **隐私边界**：短信只存在内存里，最多保留最近 100 条；不写 CSV、不写 `tether.log`、不落盘、不上传，也不读取历史短信库。「复制正文 / 复制验证码」会把明文放进 Windows 剪贴板，Toast 会留在 Windows 通知中心历史里，介意就别用这两处。
 - **实现**：走 `adb shell content query --uri content://sms/inbox`，不需要 Root、不在手机装 App；短信通道本身不引入额外依赖（UI 用的 WPF-UI 与它无关）。`body` 放在 `--projection` 最后一项，按 `Row:` 分段合并，正文里的逗号、等号和换行都不会被截断。
-- **权限**：部分 ROM 会拒绝 shell 读取短信（输出 `Permission Denial` / `READ_SMS`）。这类失败不会被静默当成「没有新短信」：主窗口底部显示原因、托盘提示一次。此时需要在开发者选项里打开「USB 调试（安全设置）」，或执行 `adb shell appops set com.android.shell READ_SMS allow`。
+- **权限**：部分 ROM 会拒绝 shell 读取短信（输出 `Permission Denial` / `READ_SMS`）。这类失败不会被静默当成「没有新短信」：主窗口「近期短信」卡片用橙色文字显示原因，并弹一次托盘气泡。此时需要在开发者选项里打开「USB 调试（安全设置）」，或执行 `adb shell appops set com.android.shell READ_SMS allow`。
 - **实时性**：10 秒轮询，不是推送。USB 重枚举期间可能漏，靠下一次查询补上（只补本次运行期间、基线之后的）。要亚秒级推送得在手机装 App 监听 `SMS_RECEIVED`，与本项目「不装客户端」的原则冲突，暂不做。
 
 多设备时沿用设置里的「目标设备」，只对那台手机查询；预设设备不在线就不查。判定与去重细节见 `docs/后续计划.md` 的「实现说明：短信通知同步」。
