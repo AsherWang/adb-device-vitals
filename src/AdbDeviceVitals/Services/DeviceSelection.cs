@@ -5,7 +5,7 @@ using System.Text.RegularExpressions;
 namespace AdbDeviceVitals.Services
 {
     /// <summary>
-    /// 决定「这一轮该操作哪一台设备」。监控采集和 USB 共享开关共用这份判定，
+    /// 决定「这一轮该操作哪一台设备」。监控采集和 USB 共享服务共用这份判定，
     /// 避免出现界面看着 A 手机、开关却切了 B 手机的 USB 模式。
     /// </summary>
     public sealed class DeviceSelection

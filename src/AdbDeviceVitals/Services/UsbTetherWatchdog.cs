@@ -27,7 +27,10 @@ namespace AdbDeviceVitals.Services
         private DateTime _inactiveSinceUtc = DateTime.MinValue;
         private DateTime _lastAttemptUtc = DateTime.MinValue;
 
-        /// <summary>用户在主窗口手动关过共享：在他重新手动打开之前，自动恢复一律停手。</summary>
+        /// <summary>
+        /// 用户手动关过共享：在他重新打开之前，自动恢复一律停手。
+        /// 主窗口的手动 USB 开关已移除，当前 UI 不再调用本方法；保留在状态机里供测试覆盖与后续扩展。
+        /// </summary>
         public void NoteManualOff()
         {
             _manualOff = true;

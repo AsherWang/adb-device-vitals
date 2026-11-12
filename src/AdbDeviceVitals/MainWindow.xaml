@@ -55,8 +55,10 @@
                                     <ColumnDefinition Width="Auto" />
                                 </Grid.ColumnDefinitions>
                                 <TextBlock Grid.Column="0" Text="网络共享" FontSize="12" Opacity="0.62" VerticalAlignment="Center" />
-                                <ui:ToggleSwitch Grid.Column="1" x:Name="UsbTetherSwitch" Content="USB"
-                                                 IsEnabled="False" Click="UsbTetherSwitch_Click" />
+                                <!-- 手机侧 USB 共享由自动链路维持，这里放的是电脑侧热点开关。 -->
+                                <ui:ToggleSwitch Grid.Column="1" x:Name="PcHotspotSwitch" Content="开启热点"
+                                                 IsEnabled="False" Click="PcHotspotSwitch_Click"
+                                                 ToolTip="开关 Windows 移动热点（电脑侧）；下方「电脑热点」一行显示状态" />
                             </Grid>
                             <TextBlock x:Name="CardHotspotValue" Text="—" FontSize="23" FontWeight="SemiBold"
                                        Margin="0,3,0,0" TextTrimming="CharacterEllipsis" />
@@ -119,16 +121,13 @@
                             <ColumnDefinition Width="Auto" />
                             <ColumnDefinition Width="Auto" />
                             <ColumnDefinition Width="*" />
-                            <ColumnDefinition Width="Auto" />
                         </Grid.ColumnDefinitions>
                         <TextBlock Grid.Column="0" Text="电脑热点" FontSize="14" FontWeight="SemiBold" VerticalAlignment="Center" />
                         <TextBlock Grid.Column="1" x:Name="PcHotspotStateText" Text="—" FontSize="14"
                                    FontWeight="SemiBold" Margin="18,0,0,0" VerticalAlignment="Center" />
                         <TextBlock Grid.Column="2" x:Name="PcHotspotDetailText" Text="读取中…" FontSize="12"
-                                   Opacity="0.62" Margin="14,0,10,0" VerticalAlignment="Center"
+                                   Opacity="0.62" Margin="14,0,0,0" VerticalAlignment="Center"
                                    TextTrimming="CharacterEllipsis" />
-                        <ui:ToggleSwitch Grid.Column="3" x:Name="PcHotspotSwitch" Content="开启热点"
-                                         IsEnabled="False" Click="PcHotspotSwitch_Click" />
                     </Grid>
                 </ui:Card>
 

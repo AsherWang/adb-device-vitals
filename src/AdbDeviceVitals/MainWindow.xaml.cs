@@ -48,7 +48,6 @@ namespace AdbDeviceVitals
         private bool _allowExit;
         private bool _offlineNotified;
         private bool _needsDeviceChoice;
-        private bool _tetherSwitchBusy;
         private bool _usbTetherRunning;
         private CancellationTokenSource _tetherCancellation;
         private bool _usbWatchdogRunning;
@@ -217,7 +216,6 @@ namespace AdbDeviceVitals
                 ConnectionStatus.Foreground = Orange;
                 SetCard("device", "未连接",
                     s.NeedsDeviceSelection ? "请在设置中指定用于网络共享的设备" : "请检查 USB 调试和设备授权");
-                SyncUsbSwitch(false, false);
                 return;
             }
 
@@ -225,7 +223,6 @@ namespace AdbDeviceVitals
             ConnectionStatus.Foreground = Green;
             SetCard("network", SafeText(s.NetworkType, "未知网络"), SafeText(s.OperatorName, "未知运营商") + "  ·  " + FormatSignal(s));
             SetCard("hotspot", TetheringTitle(s), TetheringDetail(s));
-            SyncUsbSwitch(true, s.UsbTetheringActive);
             SetCard("battery", s.BatteryLevel.HasValue ? s.BatteryLevel.Value + "%" : "—", s.BatteryStatus + "  ·  " + PowerSourceName(s) + "  ·  " + Voltage(s.BatteryVoltageV));
             SetCard("thermal", Temperature(s.BatteryTemperatureC), "系统热状态：" + ThermalName(s.ThermalStatus));
             SetCard("traffic", "↓ " + s.DownloadMbps.ToString("0.00", CultureInfo.InvariantCulture) + " Mbps",
@@ -412,7 +409,7 @@ namespace AdbDeviceVitals
 
         private void CheckUsbTetherWatchdog(DeviceSnapshot snapshot)
         {
-            bool busy = _usbTetherRunning || _tetherSwitchBusy || _usbWatchdogRunning;
+            bool busy = _usbTetherRunning || _usbWatchdogRunning;
             bool recover = _usbWatchdog.Observe(snapshot, DateTime.UtcNow,
                 AppSettings.AutoRecoverUsbTethering, AppSettings.AutoEnableUsbTethering, busy);
             if (recover) StartUsbTetherRecovery();
@@ -420,7 +417,7 @@ namespace AdbDeviceVitals
 
         private async void StartUsbTetherRecovery()
         {
-            if (_usbWatchdogRunning || _usbTetherRunning || _tetherSwitchBusy) return;
+            if (_usbWatchdogRunning || _usbTetherRunning) return;
             _usbWatchdogRunning = true;
             CancellationTokenSource source = new CancellationTokenSource();
             _usbWatchdogCancellation = source;
@@ -499,43 +496,6 @@ namespace AdbDeviceVitals
             if (!result.Succeeded) Notify("USB 网络共享", result.Message, WF.ToolTipIcon.Warning);
             else if (result.Changed) Notify("USB 网络共享", result.Message, WF.ToolTipIcon.Info);
             StartPcHotspotIfPending();
-        }
-
-        private void SyncUsbSwitch(bool connected, bool active)
-        {
-            if (_tetherSwitchBusy) return;
-            // ToggleSwitch 只在用户点击时触发 Click，代码同步 IsChecked 不会误触发操作。
-            UsbTetherSwitch.IsEnabled = connected;
-            UsbTetherSwitch.IsChecked = connected && active;
-        }
-
-        private async void UsbTetherSwitch_Click(object sender, RoutedEventArgs e)
-        {
-            if (_tetherSwitchBusy) return;
-            bool enable = UsbTetherSwitch.IsChecked == true;
-            // 手动关闭是用户明确的意思，守护不该立刻把共享抢回来；重新手动打开即解除暂停。
-            if (enable) _usbWatchdog.NoteManualOn();
-            else _usbWatchdog.NoteManualOff();
-            CancelUsbTetherWatchdog();
-            _tetherSwitchBusy = true;
-            UsbTetherSwitch.IsEnabled = false;
-            CancelUsbTethering();
-            try
-            {
-                UsbTetherResult result = await Task.Run(
-                    delegate { return new UsbTetheringService(_adb).SetEnabledAsync(enable, CancellationToken.None); });
-                ShowTetherResult(result);
-                await RefreshSnapshot(true);
-            }
-            catch (Exception ex)
-            {
-                Notify("USB 网络共享", ex.Message, WF.ToolTipIcon.Warning);
-            }
-            finally
-            {
-                _tetherSwitchBusy = false;
-                UsbTetherSwitch.IsEnabled = true;
-            }
         }
 
         private void CancelUsbTethering()
