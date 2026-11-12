@@ -8,6 +8,8 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Interop;
+using System.Windows.Media;
+using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 using AdbDeviceVitals;
 using AdbDeviceVitals.Models;
@@ -131,6 +133,15 @@ internal static class RenderSmokeTest
         Thread.Sleep(250);
         DoEvents();
 
+        // 锁屏 / 会话不可见时 CopyFromScreen 只能抓到壁纸。设置环境变量
+        // ADV_RENDER_OFFSCREEN=1 改用 RenderTargetBitmap 验证控件布局（拿不到 Mica 背景）。
+        if (string.Equals(Environment.GetEnvironmentVariable("ADV_RENDER_OFFSCREEN"), "1",
+            StringComparison.Ordinal))
+        {
+            SaveOffscreen(window, path);
+            return;
+        }
+
         IntPtr handle = new WindowInteropHelper(window).Handle;
         RECT rectangle;
         if (!GetWindowRect(handle, out rectangle)) throw new InvalidOperationException("GetWindowRect failed.");
@@ -146,6 +157,28 @@ internal static class RenderSmokeTest
             bitmap.Save(path, ImageFormat.Png);
         }
         Console.WriteLine("RENDERED: " + path + " (" + width + "x" + height + ")");
+    }
+
+    private static void SaveOffscreen(Window window, string path)
+    {
+        // Mica 是 DWM 画的，离屏渲染里给窗口一个实色底，保证文字与卡片可读。
+        window.Background = System.Windows.Media.Brushes.White;
+        window.UpdateLayout();
+        Dispatcher.CurrentDispatcher.Invoke(DispatcherPriority.Render, new Action(delegate { }));
+        DoEvents();
+
+        int width = Math.Max(1, (int)Math.Ceiling(window.ActualWidth));
+        int height = Math.Max(1, (int)Math.Ceiling(window.ActualHeight));
+        RenderTargetBitmap bitmap = new RenderTargetBitmap(width, height, 96, 96, PixelFormats.Pbgra32);
+        bitmap.Render(window);
+
+        PngBitmapEncoder encoder = new PngBitmapEncoder();
+        encoder.Frames.Add(BitmapFrame.Create(bitmap));
+        string directory = Path.GetDirectoryName(Path.GetFullPath(path));
+        if (!string.IsNullOrEmpty(directory)) Directory.CreateDirectory(directory);
+        using (FileStream stream = new FileStream(path, FileMode.Create, FileAccess.Write))
+            encoder.Save(stream);
+        Console.WriteLine("RENDERED (offscreen): " + path + " (" + width + "x" + height + ")");
     }
 
     private static void DoEvents()

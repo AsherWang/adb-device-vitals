@@ -23,6 +23,11 @@ if ($LASTEXITCODE -ne 0) { throw "Test project build failed with exit code $LAST
 if ($LASTEXITCODE -ne 0) { throw "Parser tests failed with exit code $LASTEXITCODE." }
 
 # Render smoke: real WPF windows with sample data, three PNG screenshots.
+# When the session is locked, CopyFromScreen only captures the wallpaper.
+# Fall back to offscreen layout rendering so the screenshots stay usable.
+if (@(Get-Process -Name LogonUI -ErrorAction SilentlyContinue).Count -gt 0) {
+    $env:ADV_RENDER_OFFSCREEN = '1'
+}
 $artifacts = Join-Path $root 'artifacts'
 New-Item -ItemType Directory -Force -Path $artifacts | Out-Null
 # New names avoid stale WinForms screenshots being mistaken for fresh output.

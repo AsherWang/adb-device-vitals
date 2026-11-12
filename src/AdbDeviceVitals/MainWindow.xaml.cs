@@ -199,14 +199,14 @@ namespace AdbDeviceVitals
             {
                 ConnectionStatus.Text = "采集失败";
                 ConnectionStatus.Foreground = Red;
-                UpdatedText.Text = ex.Message;
+                // 底部状态行已移除；采集异常保留在顶部状态的悬停提示里，方便排障。
+                ConnectionStatus.ToolTip = ex.Message;
             }
             finally { _polling = false; }
         }
 
         private void UpdateUi(DeviceSnapshot s)
         {
-            UpdatedText.Text = "更新于 " + s.Timestamp.ToString("HH:mm:ss");
             _needsDeviceChoice = s.NeedsDeviceSelection;
             ConnectionStatus.Cursor = _needsDeviceChoice ? Cursors.Hand : Cursors.Arrow;
             if (!s.Connected)
@@ -424,7 +424,6 @@ namespace AdbDeviceVitals
             _usbWatchdogRunning = true;
             CancellationTokenSource source = new CancellationTokenSource();
             _usbWatchdogCancellation = source;
-            ShowTetherStatus("USB 网络共享已断开，正在尝试恢复…", Muted);
             Notify("USB 网络共享", "检测到网络共享已断开，正在尝试重新开启。", WF.ToolTipIcon.Info);
             try
             {
@@ -447,12 +446,10 @@ namespace AdbDeviceVitals
             if (result.Succeeded)
             {
                 _usbWatchdogFailureNotified = false;
-                ShowTetherStatus(result.Changed ? "已自动恢复 USB 网络共享。" : "USB 网络共享已恢复。", Green);
                 if (result.Changed) Notify("USB 网络共享", "已自动恢复 USB 网络共享。", WF.ToolTipIcon.Info);
             }
             else
             {
-                ShowTetherStatus("自动恢复 USB 网络共享失败：" + result.Message, Orange);
                 if (!_usbWatchdogFailureNotified)
                 {
                     Notify("USB 网络共享", "自动恢复失败：" + result.Message + "。稍后会再试。", WF.ToolTipIcon.Warning);
@@ -475,7 +472,6 @@ namespace AdbDeviceVitals
             CancelUsbTethering();
             if (!AppSettings.AutoEnableUsbTethering)
             {
-                ShowTetherStatus(string.Empty, Muted);
                 StartPcHotspotIfPending();
                 return;
             }
@@ -483,7 +479,6 @@ namespace AdbDeviceVitals
             CancellationTokenSource source = new CancellationTokenSource();
             _tetherCancellation = source;
             _usbTetherRunning = true;
-            ShowTetherStatus("正在检查 USB 网络共享…", Muted);
             try
             {
                 UsbTetherResult result = await Task.Run(
@@ -501,7 +496,6 @@ namespace AdbDeviceVitals
         {
             _usbTetherRunning = false;
             if (!result.Completed) return;
-            ShowTetherStatus(result.Message, result.Succeeded ? Green : Orange);
             if (!result.Succeeded) Notify("USB 网络共享", result.Message, WF.ToolTipIcon.Warning);
             else if (result.Changed) Notify("USB 网络共享", result.Message, WF.ToolTipIcon.Info);
             StartPcHotspotIfPending();
@@ -526,7 +520,6 @@ namespace AdbDeviceVitals
             _tetherSwitchBusy = true;
             UsbTetherSwitch.IsEnabled = false;
             CancelUsbTethering();
-            ShowTetherStatus(enable ? "正在开启 USB 网络共享…" : "正在关闭 USB 网络共享…", Muted);
             try
             {
                 UsbTetherResult result = await Task.Run(
@@ -536,19 +529,13 @@ namespace AdbDeviceVitals
             }
             catch (Exception ex)
             {
-                ShowTetherStatus(ex.Message, Orange);
+                Notify("USB 网络共享", ex.Message, WF.ToolTipIcon.Warning);
             }
             finally
             {
                 _tetherSwitchBusy = false;
                 UsbTetherSwitch.IsEnabled = true;
             }
-        }
-
-        private void ShowTetherStatus(string message, Brush brush)
-        {
-            TetherStatusText.Text = message;
-            TetherStatusText.Foreground = brush;
         }
 
         private void CancelUsbTethering()

@@ -27,10 +27,8 @@
                         <ColumnDefinition Width="Auto" />
                         <ColumnDefinition Width="Auto" />
                     </Grid.ColumnDefinitions>
-                    <StackPanel Grid.Column="0" VerticalAlignment="Center">
-                        <TextBlock Text="设备状态" FontSize="26" FontWeight="SemiBold" />
-                        <TextBlock Text="通过本机 ADB 读取，每 2.5 秒刷新" FontSize="12" Opacity="0.62" Margin="0,3,0,0" />
-                    </StackPanel>
+                    <TextBlock Grid.Column="0" Text="设备状态" FontSize="26" FontWeight="SemiBold"
+                               VerticalAlignment="Center" />
                     <TextBlock Grid.Column="2" x:Name="ConnectionStatus" Text="正在连接…"
                                VerticalAlignment="Center" Margin="0,0,16,0"
                                FontSize="13" MouseLeftButtonUp="ConnectionStatus_Click" />
@@ -149,16 +147,6 @@
                                    Appearance="Secondary" Padding="16,6" Click="OpenSmsButton_Click" />
                     </Grid>
                 </ui:Card>
-
-                <Grid Margin="5,6,5,0">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="Auto" />
-                        <ColumnDefinition Width="*" />
-                    </Grid.ColumnDefinitions>
-                    <TextBlock Grid.Column="0" x:Name="UpdatedText" Text="尚未采集" FontSize="12" Opacity="0.62" />
-                    <TextBlock Grid.Column="1" x:Name="TetherStatusText" Text="" FontSize="12" Opacity="0.7"
-                               HorizontalAlignment="Right" TextTrimming="CharacterEllipsis" Margin="20,0,0,0" />
-                </Grid>
             </StackPanel>
         </ScrollViewer>
     </Grid>

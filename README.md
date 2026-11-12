@@ -96,7 +96,7 @@
 
 - **只保持已经开着的状态**。程序启动后共享本来就没开时，守护不会动手；首次开启由「启动后自动开启 USB 网络共享」负责。如果那个开关也打开了，就按「本来就该开着」处理，启动瞬间的掉线也能兜住。两个开关相互独立，只开守护也能保护手动开起来的共享。
 - **不靠单次读数下判断**：每 20 秒检查一次，连续 20 秒都读到未开启才认定断开，避免 `dumpsys` 输出抖动就切 USB 模式。真正执行前复用手动开启那条链路再读一次 `dumpsys tethering`，共享其实还在时只返回「已开启」，不会重复下发 `setFunctions rndis`。
-- **失败不刷屏**：一次尝试之后至少隔 60 秒再试；托盘只在第一次失败时提醒，界面状态栏始终显示最新结果。
+- **失败不刷屏**：一次尝试之后至少隔 60 秒再试；托盘只在第一次失败时提醒，主窗口「网络共享」卡片随每轮采集更新状态。
 - **手动关闭优先**：在主窗口手动关掉共享后，自动恢复会暂停，直到你再次手动打开；在设置里把守护从关改成开也会解除暂停。设备掉线、或已有其它 USB 切换任务在跑时，同样不会插手。
 
 判定用的状态机、并发与重试细节见 `docs/后续计划.md` 的「实现说明：USB 网络共享掉线自动恢复」。
@@ -173,7 +173,7 @@ USB 网络共享切换后网卡会重新枚举，Windows 还要做一轮连通�
 ```
 
 - 逻辑测试：`tests\AdbDeviceVitals.Tests.csproj`，链接解析器 / 状态机等纯逻辑源码，输出 `All parser tests passed.`
-- 渲染测试：`tests\AdbDeviceVitals.RenderTest.csproj`，在真实 `Application.Run()` 消息循环里显示三个窗口，用 Win32 `GetWindowRect` + `Graphics.CopyFromScreen` 截图（WPF 的 `RenderTargetBitmap` 截不到 DWM 画的 Mica 背景）。产物：`artifacts\wpf-main.png`、`artifacts\wpf-settings.png`、`artifacts\wpf-sms.png`。
+- 渲染测试：`tests\AdbDeviceVitals.RenderTest.csproj`，在真实 `Application.Run()` 消息循环里显示三个窗口，用 Win32 `GetWindowRect` + `Graphics.CopyFromScreen` 截图（WPF 的 `RenderTargetBitmap` 截不到 DWM 画的 Mica 背景）。产物：`artifacts\wpf-main.png`、`artifacts\wpf-settings.png`、`artifacts\wpf-sms.png`。**屏幕锁定时** `CopyFromScreen` 只能抓到壁纸，`test.ps1` 会自动设 `ADV_RENDER_OFFSCREEN=1`，改用 `RenderTargetBitmap` + 白底渲染控件布局（没有 Mica，但文字和控件完整）；也可以手动设这个环境变量。
 - CI 发布：`.github\workflows\release.yml` 在推 `v*` 标签时先用 `actions/setup-dotnet@v4` 装 .NET 10 SDK，再执行同一个 `.\build.ps1`。
 
 ## 数据兼容性
