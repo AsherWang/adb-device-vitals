@@ -1,5 +1,8 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
+using System.IO;
+using System.Threading;
 using AdbDeviceVitals.Models;
 using AdbDeviceVitals.Parsing;
 using AdbDeviceVitals.Services;
@@ -21,6 +24,7 @@ internal static class ParserTests
         SmsEnhancements();
         UsbTetherWatchdogTests();
         Updates();
+        LogRobustness();
         Console.WriteLine(_failed == 0 ? "All parser tests passed." : _failed + " parser test(s) failed.");
         return _failed == 0 ? 0 : 1;
     }
@@ -103,8 +107,8 @@ internal static class ParserTests
         Equal(true, UpdateChecker.HashMatches("abc  AdbDeviceVitals-win-x64.zip\n", UpdateChecker.PackageFileName, "abc"), "hash match");
         Equal(false, UpdateChecker.HashMatches("def  AdbDeviceVitals-win-x64.zip\n", UpdateChecker.PackageFileName, "abc"), "hash mismatch");
         Equal(true, UpdateChecker.IsDevelopmentBuild(@"D:\src\AdbDeviceVitals\bin\Release\AdbDeviceVitals.exe"), "dev release path");
-        Equal(false, UpdateChecker.IsDevelopmentBuild(@"C:\Users\ash\Desktop\AdbDeviceVitals.exe"), "desktop path");
-        Equal(true, UpdateChecker.ShouldCheckAutomatically(@"C:\Users\ash\Desktop\AdbDeviceVitals.exe"), "installed exe");
+        Equal(false, UpdateChecker.IsDevelopmentBuild(@"C:\Users\TestUser\Desktop\AdbDeviceVitals.exe"), "desktop path");
+        Equal(true, UpdateChecker.ShouldCheckAutomatically(@"C:\Users\TestUser\Desktop\AdbDeviceVitals.exe"), "installed exe");
         Equal(false, UpdateChecker.ShouldCheckAutomatically(@"D:\src\AdbDeviceVitals\bin\Release\AdbDeviceVitals.exe"), "dev exe");
         Equal(false, UpdateChecker.ShouldCheckAutomatically(@"D:\artifacts\tests\RenderSmokeTest.exe"), "test exe");
         Equal(true, UsbTetheringService.IsUsbFunctionChangeAcknowledged("setCurrentFunctions opId:1", string.Empty), "usb function ack");
@@ -383,6 +387,70 @@ internal static class ParserTests
         Equal(false, recovered.Observe(off, t.AddSeconds(20), true, false, false), "recovered waits");
         Equal(true, recovered.Observe(off, t.AddSeconds(40), true, false, false), "recovered triggers");
         Equal(false, recovered.Observe(on, t.AddSeconds(60), true, false, false), "active again is quiet");
+    }
+
+    /// <summary>
+    /// 回归：设置保存后会同时启动 USB 自动开启、电脑热点和 ADB daemon 恢复，多个
+    /// TetherLog 实例并发写同一文件；旧版实例级锁 + File.AppendAllText(FileShare.Read)
+    /// 会抛 IOException 并冒泡成「USB 网络共享」错误气泡。
+    /// </summary>
+    private static void LogRobustness()
+    {
+        string directory = Path.Combine(Path.GetTempPath(), "adv-log-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            Directory.CreateDirectory(directory);
+            string file = Path.Combine(directory, "tether.log");
+            TetherLog[] logs = { new TetherLog(file), new TetherLog(file), new TetherLog(file) };
+            const int workers = 6;
+            const int perWorker = 40;
+            Thread[] threads = new Thread[workers];
+            Exception failure = null;
+            for (int i = 0; i < workers; i++)
+            {
+                int index = i;
+                threads[i] = new Thread((ThreadStart)delegate
+                {
+                    try
+                    {
+                        for (int n = 0; n < perWorker; n++)
+                            logs[index % logs.Length].Write("worker " + index + " line " + n);
+                    }
+                    catch (Exception ex) { failure = ex; }
+                });
+                threads[i].Start();
+            }
+            foreach (Thread thread in threads) thread.Join();
+            Equal(null, failure, "concurrent tether log must not throw");
+            Equal(workers * perWorker, File.ReadAllLines(file).Length, "concurrent tether log must not lose lines");
+
+            // 外部程序（记事本 / 杀软 / 旧进程）独占文件时，只丢这一行日志，不阻断业务。
+            using (FileStream hold = new FileStream(file, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+            {
+                Exception blocked = null;
+                try { new TetherLog(file).Write("blocked"); } catch (Exception ex) { blocked = ex; }
+                Equal(null, blocked, "locked tether log must not throw");
+            }
+
+            DeviceSnapshot sample = new DeviceSnapshot();
+            sample.Connected = true;
+            string csvDirectory = Path.Combine(directory, "csv");
+            CsvLogger csv = new CsvLogger(csvDirectory);
+            csv.Append(sample);
+            string csvFile = Path.Combine(csvDirectory,
+                sample.Timestamp.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) + ".csv");
+            Equal(true, File.Exists(csvFile), "csv log should be written");
+            using (FileStream hold = new FileStream(csvFile, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+            {
+                Exception blocked = null;
+                try { csv.Append(sample); } catch (Exception ex) { blocked = ex; }
+                Equal(null, blocked, "locked csv log must not throw");
+            }
+        }
+        finally
+        {
+            try { Directory.Delete(directory, true); } catch { }
+        }
     }
 
     private static void Equal(object expected, object actual, string name)

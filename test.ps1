@@ -22,7 +22,7 @@ if ($LASTEXITCODE -ne 0) { throw "Test project build failed with exit code $LAST
 & $dotnet (Join-Path $testOutput 'ParserTests.dll')
 if ($LASTEXITCODE -ne 0) { throw "Parser tests failed with exit code $LASTEXITCODE." }
 
-# Render smoke: real WPF windows with sample data, three PNG screenshots.
+# Render smoke: real WPF windows with sample data, seven PNG screenshots.
 # When the session is locked, CopyFromScreen only captures the wallpaper.
 # Fall back to offscreen layout rendering so the screenshots stay usable.
 if (@(Get-Process -Name LogonUI -ErrorAction SilentlyContinue).Count -gt 0) {
@@ -34,13 +34,19 @@ New-Item -ItemType Directory -Force -Path $artifacts | Out-Null
 $mainPng = Join-Path $artifacts 'wpf-main.png'
 $settingsPng = Join-Path $artifacts 'wpf-settings.png'
 $smsPng = Join-Path $artifacts 'wpf-sms.png'
+$detailsPng = Join-Path $artifacts 'wpf-network-details.png'
+$hoverPng = Join-Path $artifacts 'wpf-main-hover.png'
+# Screenshot taken while Alt is held: guards against the dark bar under the title bar.
+$altPng = Join-Path $artifacts 'wpf-main-alt.png'
+$batteryPng = Join-Path $artifacts 'wpf-battery-details.png'
 
 & $dotnet build (Join-Path $root 'tests\AdbDeviceVitals.RenderTest.csproj') -c Release -tl:off | Out-Null
 if ($LASTEXITCODE -ne 0) { throw "Render project build failed with exit code $LASTEXITCODE." }
-& $dotnet (Join-Path $testOutput 'RenderSmokeTest.dll') $mainPng $settingsPng $smsPng
+& $dotnet (Join-Path $testOutput 'RenderSmokeTest.dll') $mainPng $settingsPng $smsPng $detailsPng $hoverPng $altPng $batteryPng
 if ($LASTEXITCODE -ne 0) { throw "Render smoke test failed with exit code $LASTEXITCODE." }
-foreach ($png in @($mainPng, $settingsPng, $smsPng)) {
+$allPng = @($mainPng, $settingsPng, $smsPng, $detailsPng, $hoverPng, $altPng, $batteryPng)
+foreach ($png in $allPng) {
     if (-not (Test-Path -LiteralPath $png)) { throw "Missing render output: $png" }
 }
 
-Write-Output "Rendered: $mainPng, $settingsPng, $smsPng"
+Write-Output "Rendered: $($allPng -join ', ')"

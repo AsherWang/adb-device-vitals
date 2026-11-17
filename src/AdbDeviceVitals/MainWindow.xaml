@@ -9,17 +9,19 @@
         WindowStartupLocation="CenterScreen"
         ExtendsContentIntoTitleBar="True"
         WindowBackdropType="Mica"
-        FontFamily="Segoe UI" FontSize="13">
-    <Grid>
+        FontFamily="Segoe UI" FontSize="13"
+        FocusVisualStyle="{x:Null}">
+    <!-- 按 Alt 时不画系统默认的黑色焦点虚线框，避免在标题栏下方露出一条「黑条」。 -->
+    <Grid FocusVisualStyle="{x:Null}">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
         </Grid.RowDefinitions>
 
-        <ui:TitleBar Grid.Row="0" Title="ADB Device Vitals" />
+        <ui:TitleBar Grid.Row="0" Title="ADB Device Vitals" FocusVisualStyle="{x:Null}" />
 
-        <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
-            <StackPanel Margin="28,6,28,12">
+        <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" FocusVisualStyle="{x:Null}">
+            <StackPanel Margin="28,6,28,12" FocusVisualStyle="{x:Null}">
                 <Grid Margin="0,0,0,6">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="Auto" />
@@ -36,75 +38,107 @@
                                Appearance="Secondary" Padding="18,7" Click="SettingsButton_Click" />
                 </Grid>
 
-                <UniformGrid Columns="3" Rows="2">
-                    <ui:Card Margin="5">
-                        <StackPanel Margin="16,8">
-                            <TextBlock Text="蜂窝网络" FontSize="12" Opacity="0.62" />
-                            <TextBlock x:Name="CardNetworkValue" Text="—" FontSize="23" FontWeight="SemiBold"
-                                       Margin="0,3,0,0" TextTrimming="CharacterEllipsis" />
-                            <TextBlock x:Name="CardNetworkDetail" Text="等待数据" FontSize="12" Opacity="0.62"
-                                       Margin="0,4,0,0" MinHeight="20" TextWrapping="Wrap" />
-                        </StackPanel>
+                <!-- UniformGrid 等分三格；每张卡片再显式 Stretch，避免控件默认对齐让内容少的卡片收缩。
+                     MinHeight=132 固定首行卡片高度，不受卡片内容多少影响；读数块由 Center 自动保持垂直居中。 -->
+                <UniformGrid Columns="3" Rows="1">
+                    <!-- 原「蜂窝网络」+「网速」两卡合并：信号结论与上下行速率都在这一张卡上，
+                         型号 / 运营商 / RSRP / 共享明细等仍收进 hover 出现的 ⓘ 详情弹窗。 -->
+                    <ui:Card x:Name="NetworkCard" Margin="5" Padding="0" MinHeight="132"
+                             HorizontalAlignment="Stretch" VerticalAlignment="Stretch"
+                             HorizontalContentAlignment="Stretch" VerticalContentAlignment="Stretch"
+                             MouseEnter="NetworkCard_MouseEnter" MouseLeave="NetworkCard_MouseLeave">
+                        <Grid>
+                            <StackPanel Margin="10" HorizontalAlignment="Stretch" VerticalAlignment="Top">
+                                <TextBlock Text="蜂窝网络" FontSize="12" Opacity="0.62" />
+                            </StackPanel>
+                            <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
+                                <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
+                                    <Border x:Name="SignalBar1" Width="7" Height="6" CornerRadius="1" Margin="0,0,3,0"
+                                            VerticalAlignment="Bottom" Background="#FFD2D2D2" />
+                                    <Border x:Name="SignalBar2" Width="7" Height="9" CornerRadius="1" Margin="0,0,3,0"
+                                            VerticalAlignment="Bottom" Background="#FFD2D2D2" />
+                                    <Border x:Name="SignalBar3" Width="7" Height="12" CornerRadius="1" Margin="0,0,3,0"
+                                            VerticalAlignment="Bottom" Background="#FFD2D2D2" />
+                                    <Border x:Name="SignalBar4" Width="7" Height="15" CornerRadius="1" Margin="0,0,3,0"
+                                            VerticalAlignment="Bottom" Background="#FFD2D2D2" />
+                                    <Border x:Name="SignalBar5" Width="7" Height="18" CornerRadius="1"
+                                            VerticalAlignment="Bottom" Background="#FFD2D2D2" />
+                                </StackPanel>
+                                <!-- 上下行速率从原「网速」卡搬来，小一号与信号结论区分主次。 -->
+                                <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,8,0,0">
+                                    <TextBlock x:Name="CardTrafficValue" Text="↓ —" FontSize="13"
+                                               HorizontalAlignment="Center" TextTrimming="CharacterEllipsis" />
+                                    <TextBlock x:Name="CardTrafficDetail" Text="↑ —" FontSize="13" Opacity="0.72"
+                                               HorizontalAlignment="Center" Margin="14,0,0,0"
+                                               TextTrimming="CharacterEllipsis" />
+                                </StackPanel>
+                            </StackPanel>
+                            <Border x:Name="NetworkInfoButton" Width="20" Height="20"
+                                    CornerRadius="10" BorderThickness="1" BorderBrush="#FF8A8A8A"
+                                    Background="Transparent" Cursor="Hand"
+                                    HorizontalAlignment="Right" VerticalAlignment="Top" Margin="0,10,10,0"
+                                    Visibility="Hidden" MouseLeftButtonUp="NetworkInfo_Click" ToolTip="查看详细参数">
+                                <TextBlock Text="i" FontSize="12" FontWeight="SemiBold" FontFamily="Segoe UI"
+                                           Opacity="0.8" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                            </Border>
+                        </Grid>
                     </ui:Card>
 
-                    <ui:Card Margin="5">
-                        <StackPanel Margin="16,8">
-                            <Grid>
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="*" />
-                                    <ColumnDefinition Width="Auto" />
-                                </Grid.ColumnDefinitions>
-                                <TextBlock Grid.Column="0" Text="网络共享" FontSize="12" Opacity="0.62" VerticalAlignment="Center" />
-                                <!-- 手机侧 USB 共享由自动链路维持，这里放的是电脑侧热点开关。 -->
-                                <ui:ToggleSwitch Grid.Column="1" x:Name="PcHotspotSwitch" Content="开启热点"
-                                                 IsEnabled="False" Click="PcHotspotSwitch_Click"
-                                                 ToolTip="开关 Windows 移动热点（电脑侧）；下方「电脑热点」一行显示状态" />
-                            </Grid>
-                            <TextBlock x:Name="CardHotspotValue" Text="—" FontSize="23" FontWeight="SemiBold"
-                                       Margin="0,3,0,0" TextTrimming="CharacterEllipsis" />
-                            <TextBlock x:Name="CardHotspotDetail" Text="等待数据" FontSize="12" Opacity="0.62"
-                                       Margin="0,4,0,0" MinHeight="20" TextWrapping="Wrap" />
-                        </StackPanel>
+                    <!-- 第二张卡：中国广电套餐余量。点卡片查询 / 刷新（无登录态会弹 WebView 人工登录），
+                         ⓘ 打开每个流量包的明细弹窗；读数由 BroadnetSessionService 的接口优先 + DOM 兜底得到。 -->
+                    <ui:Card x:Name="BroadnetCard" Margin="5" Padding="0" MinHeight="132"
+                             HorizontalAlignment="Stretch" VerticalAlignment="Stretch"
+                             HorizontalContentAlignment="Stretch" VerticalContentAlignment="Stretch"
+                             Cursor="Hand" MouseLeftButtonUp="BroadnetCard_Click"
+                             MouseEnter="BroadnetCard_MouseEnter" MouseLeave="BroadnetCard_MouseLeave">
+                        <Grid>
+                            <StackPanel Margin="10" HorizontalAlignment="Stretch" VerticalAlignment="Top">
+                                <TextBlock Text="剩余流量" FontSize="12" Opacity="0.62" />
+                            </StackPanel>
+                            <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
+                                <TextBlock x:Name="BroadnetRemainValue" Text="点击查询" FontSize="23" FontWeight="SemiBold"
+                                           HorizontalAlignment="Center" TextTrimming="CharacterEllipsis" />
+                                <TextBlock x:Name="BroadnetBalanceValue" Text="中国广电 · 套餐余量" FontSize="13" Opacity="0.72"
+                                           HorizontalAlignment="Center" Margin="0,4,0,0"
+                                           TextTrimming="CharacterEllipsis" />
+                            </StackPanel>
+                            <Border x:Name="BroadnetInfoButton" Width="20" Height="20"
+                                    CornerRadius="10" BorderThickness="1" BorderBrush="#FF8A8A8A"
+                                    Background="Transparent" Cursor="Hand"
+                                    HorizontalAlignment="Right" VerticalAlignment="Top" Margin="0,10,10,0"
+                                    Visibility="Hidden" MouseLeftButtonUp="BroadnetInfo_Click" ToolTip="查看套餐明细">
+                                <TextBlock Text="i" FontSize="12" FontWeight="SemiBold" FontFamily="Segoe UI"
+                                           Opacity="0.8" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                            </Border>
+                        </Grid>
                     </ui:Card>
 
-                    <ui:Card Margin="5">
-                        <StackPanel Margin="16,8">
-                            <TextBlock Text="电池" FontSize="12" Opacity="0.62" />
-                            <TextBlock x:Name="CardBatteryValue" Text="—" FontSize="23" FontWeight="SemiBold"
-                                       Margin="0,3,0,0" TextTrimming="CharacterEllipsis" />
-                            <TextBlock x:Name="CardBatteryDetail" Text="等待数据" FontSize="12" Opacity="0.62"
-                                       Margin="0,4,0,0" MinHeight="20" TextWrapping="Wrap" />
-                        </StackPanel>
-                    </ui:Card>
-
-                    <ui:Card Margin="5">
-                        <StackPanel Margin="16,8">
-                            <TextBlock Text="温度与热状态" FontSize="12" Opacity="0.62" />
-                            <TextBlock x:Name="CardThermalValue" Text="—" FontSize="23" FontWeight="SemiBold"
-                                       Margin="0,3,0,0" TextTrimming="CharacterEllipsis" />
-                            <TextBlock x:Name="CardThermalDetail" Text="等待数据" FontSize="12" Opacity="0.62"
-                                       Margin="0,4,0,0" MinHeight="20" TextWrapping="Wrap" />
-                        </StackPanel>
-                    </ui:Card>
-
-                    <ui:Card Margin="5">
-                        <StackPanel Margin="16,8">
-                            <TextBlock Text="实时流量" FontSize="12" Opacity="0.62" />
-                            <TextBlock x:Name="CardTrafficValue" Text="—" FontSize="23" FontWeight="SemiBold"
-                                       Margin="0,3,0,0" TextTrimming="CharacterEllipsis" />
-                            <TextBlock x:Name="CardTrafficDetail" Text="等待数据" FontSize="12" Opacity="0.62"
-                                       Margin="0,4,0,0" MinHeight="20" TextWrapping="Wrap" />
-                        </StackPanel>
-                    </ui:Card>
-
-                    <ui:Card Margin="5">
-                        <StackPanel Margin="16,8">
-                            <TextBlock Text="设备" FontSize="12" Opacity="0.62" />
-                            <TextBlock x:Name="CardDeviceValue" Text="—" FontSize="23" FontWeight="SemiBold"
-                                       Margin="0,3,0,0" TextTrimming="CharacterEllipsis" />
-                            <TextBlock x:Name="CardDeviceDetail" Text="等待数据" FontSize="12" Opacity="0.62"
-                                       Margin="0,4,0,0" MinHeight="20" TextWrapping="Wrap" />
-                        </StackPanel>
+                    <!-- 和前两张卡片同构：标题贴左上角、电量与温度居中、其余细节收进 hover 出现的 ⓘ 弹窗。 -->
+                    <ui:Card x:Name="BatteryCard" Margin="5" Padding="0" MinHeight="132"
+                             HorizontalAlignment="Stretch" VerticalAlignment="Stretch"
+                             HorizontalContentAlignment="Stretch" VerticalContentAlignment="Stretch"
+                             MouseEnter="BatteryCard_MouseEnter" MouseLeave="BatteryCard_MouseLeave">
+                        <Grid>
+                            <StackPanel Margin="10" HorizontalAlignment="Stretch" VerticalAlignment="Top">
+                                <TextBlock Text="电池" FontSize="12" Opacity="0.62" />
+                            </StackPanel>
+                            <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
+                                <TextBlock x:Name="CardBatteryValue" Text="—" FontSize="23" FontWeight="SemiBold"
+                                           HorizontalAlignment="Center" TextTrimming="CharacterEllipsis" />
+                                <!-- 温度是这块状态里唯一需要常驻的第二读数，样式与「网速」卡片的 ↑ 行一致。 -->
+                                <TextBlock x:Name="CardTemperatureValue" Text="—" FontSize="23" FontWeight="SemiBold"
+                                           Opacity="0.72" HorizontalAlignment="Center" Margin="0,3,0,0"
+                                           TextTrimming="CharacterEllipsis" />
+                            </StackPanel>
+                            <Border x:Name="BatteryInfoButton" Width="20" Height="20"
+                                    CornerRadius="10" BorderThickness="1" BorderBrush="#FF8A8A8A"
+                                    Background="Transparent" Cursor="Hand"
+                                    HorizontalAlignment="Right" VerticalAlignment="Top" Margin="0,10,10,0"
+                                    Visibility="Hidden" MouseLeftButtonUp="BatteryInfo_Click" ToolTip="查看电池详情">
+                                <TextBlock Text="i" FontSize="12" FontWeight="SemiBold" FontFamily="Segoe UI"
+                                           Opacity="0.8" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                            </Border>
+                        </Grid>
                     </ui:Card>
                 </UniformGrid>
 
@@ -116,11 +150,12 @@
                 </ui:Card>
 
                 <ui:Card Margin="5,6,5,0">
-                    <Grid Margin="16,7">
+                    <Grid Margin="16,5">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="Auto" />
                             <ColumnDefinition Width="Auto" />
                             <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
                         </Grid.ColumnDefinitions>
                         <TextBlock Grid.Column="0" Text="电脑热点" FontSize="14" FontWeight="SemiBold" VerticalAlignment="Center" />
                         <TextBlock Grid.Column="1" x:Name="PcHotspotStateText" Text="—" FontSize="14"
@@ -128,6 +163,11 @@
                         <TextBlock Grid.Column="2" x:Name="PcHotspotDetailText" Text="读取中…" FontSize="12"
                                    Opacity="0.62" Margin="14,0,0,0" VerticalAlignment="Center"
                                    TextTrimming="CharacterEllipsis" />
+                        <!-- 开关与它控制的电脑热点状态放在同一行，主面板卡片只保留数据。 -->
+                        <ui:ToggleSwitch Grid.Column="3" x:Name="PcHotspotSwitch" Content="开启热点"
+                                         IsEnabled="False" Click="PcHotspotSwitch_Click"
+                                         Margin="12,0,0,0" VerticalAlignment="Center"
+                                         ToolTip="开关 Windows 移动热点（电脑侧）；左侧显示当前状态" />
                     </Grid>
                 </ui:Card>
 

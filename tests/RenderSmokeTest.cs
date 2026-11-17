@@ -37,10 +37,19 @@ internal static class RenderSmokeTest
     [DllImport("user32.dll")]
     private static extern bool GetWindowRect(IntPtr handle, out RECT rectangle);
 
+    [DllImport("user32.dll")]
+    private static extern void keybd_event(byte virtualKey, byte scanCode, int flags, int extraInfo);
+
+    [DllImport("user32.dll")]
+    private static extern bool SetCursorPos(int x, int y);
+
+    [DllImport("user32.dll")]
+    private static extern void mouse_event(int flags, int dx, int dy, int data, int extraInfo);
+
     [STAThread]
     private static int Main(string[] args)
     {
-        if (args.Length < 3) return 2;
+        if (args.Length < 5) return 2;
         _args = args;
         App application = new App();
         application.InitializeComponent();
@@ -57,6 +66,8 @@ internal static class RenderSmokeTest
             RenderMainWindow(_args[0]);
             RenderSettings(_args[1]);
             RenderSms(_args[2]);
+            RenderNetworkDetails(_args[3]);
+            if (_args.Length > 6) RenderBatteryDetails(_args[6]);
             _result = 0;
         }
         catch (Exception ex)
@@ -89,6 +100,203 @@ internal static class RenderSmokeTest
         if (applyHotspot != null)
             applyHotspot.Invoke(window, new object[] { PcHotspotSnapshot.Available(PcHotspotState.On, "VITALS-TEST", 2, 8, "以太网 2") });
 
+        MethodInfo applyPublicIp = typeof(MainWindow).GetMethod("ApplyPublicIp", BindingFlags.Instance | BindingFlags.NonPublic);
+        if (applyPublicIp != null)
+            applyPublicIp.Invoke(window, new object[]
+            {
+                "223.160.130.43",
+                "240a:4282:9000:24b2:dd06:1741:277f:f02c",
+                DateTime.Now
+            });
+
+        // 第三张卡片只留电量 + 温度两个结论，供电 / 电压 / 容量等旧控件必须只在 ⓘ 弹窗里。
+        System.Windows.Controls.TextBlock battery = NamedElement(window, "CardBatteryValue") as System.Windows.Controls.TextBlock;
+        if (battery == null || battery.Text != "100%")
+            throw new InvalidOperationException("Battery card should show the level conclusion.");
+        System.Windows.Controls.TextBlock temperature = NamedElement(window, "CardTemperatureValue") as System.Windows.Controls.TextBlock;
+        if (temperature == null || !temperature.Text.EndsWith(" °C", StringComparison.Ordinal))
+            throw new InvalidOperationException("Battery card should show the temperature conclusion.");
+        if (NamedElement(window, "CardThermalValue") != null ||
+            NamedElement(window, "CardCapacityText") != null)
+            throw new InvalidOperationException("Battery detail controls should live in the ⓘ window only.");
+
+        // 广电余量卡：注入样例读数，确认第二张卡展示剩余流量 + 话费。
+        MethodInfo applyBroadnet = typeof(MainWindow).GetMethod("ApplyBroadnetCard",
+            BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public);
+        if (applyBroadnet == null) throw new MissingMethodException("MainWindow.ApplyBroadnetCard");
+        applyBroadnet.Invoke(window, new object[] { "162.4 G", "话费 85.40 元" });
+        System.Windows.Controls.TextBlock remain = NamedElement(window, "BroadnetRemainValue")
+            as System.Windows.Controls.TextBlock;
+        if (remain == null || remain.Text != "162.4 G")
+            throw new InvalidOperationException("Broadnet card should show remaining traffic.");
+        System.Windows.Controls.TextBlock balance = NamedElement(window, "BroadnetBalanceValue")
+            as System.Windows.Controls.TextBlock;
+        if (balance == null || !balance.Text.Contains("话费"))
+            throw new InvalidOperationException("Broadnet card should show phone balance.");
+
+        Save(window, path);
+
+        // 按 Alt 会触发 WPF 的键盘焦点框；铺满客户区的容器被聚焦时只在标题栏下
+        // 露出上边，看起来就是一条黑线。ADV_ALT_BASELINE=1 时跳过焦点样式断言，
+        // 便于临时回退修复做对照实验（只保留 Alt 截图的像素统计）。
+        if (!string.Equals(Environment.GetEnvironmentVariable("ADV_ALT_BASELINE"), "1",
+            StringComparison.Ordinal))
+            VerifyFocusVisualPolicy(window);
+
+        // 三张卡片都靠真实 MouseEnter/MouseLeave 控制右上角 ⓘ，逐个验证并同时截图。
+        if (_args.Length > 4) VerifyInfoHover(window, _args[4]);
+
+        // 真实按下 Alt 并保持，复现用户反馈的「顶部黑条」；截图后逐像素检查客户区第一行。
+        if (_args.Length > 5) VerifyAltKey(window, _args[5]);
+    }
+
+    private static UIElement NamedElement(object target, string name)
+    {
+        FieldInfo field = target.GetType().GetField(name,
+            BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public);
+        return field == null ? null : field.GetValue(target) as UIElement;
+    }
+
+    private static void VerifyInfoHover(MainWindow window, string path)
+    {
+        string[] cardNames = { "NetworkCard", "BroadnetCard", "BatteryCard" };
+        string[] buttonNames = { "NetworkInfoButton", "BroadnetInfoButton", "BatteryInfoButton" };
+        UIElement[] cards = new UIElement[cardNames.Length];
+        UIElement[] buttons = new UIElement[cardNames.Length];
+        for (int i = 0; i < cardNames.Length; i++)
+        {
+            cards[i] = NamedElement(window, cardNames[i]);
+            buttons[i] = NamedElement(window, buttonNames[i]);
+            if (cards[i] == null || buttons[i] == null)
+                throw new InvalidOperationException(cardNames[i] + " / " + buttonNames[i] + " not found.");
+            if (buttons[i].Visibility != Visibility.Hidden)
+                throw new InvalidOperationException(buttonNames[i] + " should start hidden.");
+        }
+        for (int i = 0; i < cardNames.Length; i++)
+        {
+            cards[i].RaiseEvent(new System.Windows.Input.MouseEventArgs(
+                System.Windows.Input.Mouse.PrimaryDevice, 0)
+            {
+                RoutedEvent = UIElement.MouseEnterEvent
+            });
+            if (buttons[i].Visibility != Visibility.Visible)
+                throw new InvalidOperationException(buttonNames[i] + " did not show on hover.");
+        }
+        Save(window, path); // 三个 ⓘ 同时可见
+        for (int i = 0; i < cardNames.Length; i++)
+        {
+            cards[i].RaiseEvent(new System.Windows.Input.MouseEventArgs(
+                System.Windows.Input.Mouse.PrimaryDevice, 0)
+            {
+                RoutedEvent = UIElement.MouseLeaveEvent
+            });
+            if (buttons[i].Visibility != Visibility.Hidden)
+                throw new InvalidOperationException(buttonNames[i] + " did not hide on leave.");
+        }
+    }
+
+    private static void VerifyAltKey(Window window, string path)
+    {
+        window.Activate();
+        DoEvents();
+        // 用户反馈的路径是「先点过界面，再按 Alt」：先真实点击客户区空白处，
+        // 让 WPF 的焦点落到一个铺满窗口的容器上，再模拟按键。
+        RECT rect;
+        if (GetWindowRect(new WindowInteropHelper(window).Handle, out rect))
+        {
+            SetCursorPos(rect.Left + 200, rect.Top + 900);
+            mouse_event(0x02, 0, 0, 0, 0); // left down
+            mouse_event(0x04, 0, 0, 0, 0); // left up
+            DoEvents();
+            Thread.Sleep(80);
+            DoEvents();
+        }
+        keybd_event(0x12, 0, 0, 0); // VK_MENU 按下
+        try
+        {
+            DoEvents();
+            Thread.Sleep(150);
+            DoEvents();
+            Save(window, path);
+        }
+        finally
+        {
+            keybd_event(0x12, 0, 2, 0); // KEYEVENTF_KEYUP
+            DoEvents();
+        }
+
+        // 离屏渲染拿不到 DWM / 键盘焦点装饰，只在真实截屏下做像素断言。
+        if (string.Equals(Environment.GetEnvironmentVariable("ADV_RENDER_OFFSCREEN"), "1",
+            StringComparison.Ordinal)) return;
+        using (Bitmap bitmap = new Bitmap(path))
+        {
+            int row = 72; // 150% DPI 下 48px 标题栏 = 72 物理像素，客户区从这里开始
+            if (row >= bitmap.Height) return;
+            int dark = 0;
+            int samples = 0;
+            for (int x = 4; x < bitmap.Width - 4; x += 4)
+            {
+                samples++;
+                if (bitmap.GetPixel(x, row).R < 120) dark++;
+            }
+            Console.WriteLine("ALT KEY: dark pixels in client row " + row + " = " + dark + "/" + samples);
+            if (samples > 0 && dark * 3 > samples * 2)
+                throw new InvalidOperationException("Alt key still draws a dark bar under the title bar.");
+        }
+    }
+
+    private static void RenderNetworkDetails(string path)
+    {
+        NetworkDetailsWindow window = Prepare(new NetworkDetailsWindow());
+        DeviceSnapshot sample = BuildSample();
+        sample.NetworkType = "NR_SA";
+        sample.OperatorName = "中国广电";
+        sample.RsrpDbm = -82;
+        sample.RsrqDb = -10;
+        sample.SinrDb = 13;
+        sample.SignalLevel = 3;
+        sample.DeviceModel = "M2102K1AC";
+        sample.DeviceSerial = "vice-a8f6";
+        sample.UpstreamInterface = "rmnet_data2";
+        window.Apply(sample, "223.160.130.43",
+            "240a:4282:9000:24b2:dd06:1741:277f:f02c", DateTime.Now);
+        // 「网速」卡片的原悬停内容必须完整搬进弹窗。
+        System.Windows.Controls.TextBlock mode = NamedElement(window, "TetherModeText") as System.Windows.Controls.TextBlock;
+        System.Windows.Controls.TextBlock detail = NamedElement(window, "TetherDetailText") as System.Windows.Controls.TextBlock;
+        if (mode == null || detail == null || mode.Text != "USB + Wi-Fi" || !detail.Text.Contains("上游"))
+            throw new InvalidOperationException("Tethering details missing from network details window.");
+        Save(window, path);
+        window.FocusTethering(); // 从「网速」ⓘ 进入时的滚动定位不应抛异常
+        DoEvents();
+    }
+
+    private static void RenderBatteryDetails(string path)
+    {
+        BatteryDetailsWindow window = Prepare(new BatteryDetailsWindow());
+        DeviceSnapshot sample = BuildSample();
+        sample.BatteryTemperatureC = 32.0;
+        sample.LearnedCapacityMah = 4093;
+        window.Apply(sample);
+
+        // 从电池卡片移走的细节一条都不能丢。
+        string[,] expected =
+        {
+            { "LevelText", "100%" },
+            { "StatusText", "充电中" },
+            { "PowerText", "USB 供电" },
+            { "VoltageText", "4.392 V" },
+            { "HealthText", "良好" },
+            { "TemperatureText", "32.0 °C" },
+            { "ThermalText", "正常" },
+            { "CapacityText", "4093 mAh" }
+        };
+        for (int i = 0; i < expected.GetLength(0); i++)
+        {
+            System.Windows.Controls.TextBlock block =
+                NamedElement(window, expected[i, 0]) as System.Windows.Controls.TextBlock;
+            if (block == null || block.Text != expected[i, 1])
+                throw new InvalidOperationException(expected[i, 0] + " missing from battery details window.");
+        }
         Save(window, path);
     }
 
@@ -110,6 +318,48 @@ internal static class RenderSmokeTest
         };
         SmsWindow window = Prepare(new SmsWindow(delegate { return messages; }, delegate { }));
         Save(window, path);
+    }
+
+    private static void VerifyFocusVisualPolicy(Window window)
+    {
+        MethodInfo register = typeof(App).GetMethod("RegisterFocusVisualPolicy",
+            BindingFlags.Static | BindingFlags.NonPublic | BindingFlags.Public);
+        MethodInfo suppress = typeof(App).GetMethod("SuppressFocusVisuals",
+            BindingFlags.Static | BindingFlags.NonPublic | BindingFlags.Public);
+        if (register == null || suppress == null)
+            throw new MissingMethodException("App focus-visual policy methods not found.");
+        register.Invoke(null, null);
+        suppress.Invoke(null, new object[] { window });
+        FrameworkElement rootGrid = window.Content as FrameworkElement;
+        if (rootGrid == null) throw new InvalidOperationException("Main window content missing.");
+        // 人为挂一个焦点样式，再模拟一次键盘焦点事件，class handler 必须把它清成 null。
+        rootGrid.FocusVisualStyle = new Style(typeof(FrameworkElement));
+        rootGrid.RaiseEvent(new System.Windows.Input.KeyboardFocusChangedEventArgs(
+            System.Windows.Input.Keyboard.PrimaryDevice, 0, null, rootGrid)
+        {
+            RoutedEvent = System.Windows.Input.Keyboard.PreviewGotKeyboardFocusEvent
+        });
+        if (rootGrid.FocusVisualStyle != null)
+            throw new InvalidOperationException("Keyboard focus visual is not suppressed.");
+        int elements = AssertNoFocusVisual(window);
+        if (elements < 10)
+            throw new InvalidOperationException("Visual tree too small for focus-visual check: " + elements);
+    }
+
+    private static int AssertNoFocusVisual(DependencyObject root)
+    {
+        int count = 0;
+        FrameworkElement element = root as FrameworkElement;
+        if (element != null)
+        {
+            count++;
+            if (element.FocusVisualStyle != null)
+                throw new InvalidOperationException("FocusVisualStyle should be null on " + element.GetType().Name);
+        }
+        int children = VisualTreeHelper.GetChildrenCount(root);
+        for (int i = 0; i < children; i++)
+            count += AssertNoFocusVisual(VisualTreeHelper.GetChild(root, i));
+        return count;
     }
 
     private static T Prepare<T>(T window) where T : Window

@@ -3,10 +3,13 @@ using System.Collections.Generic;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.Globalization;
+using System.Net.NetworkInformation;
+using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Input;
+using System.Windows.Interop;
 using System.Windows.Media;
 using System.Windows.Threading;
 using AdbDeviceVitals.Controls;
@@ -29,6 +32,7 @@ namespace AdbDeviceVitals
         private static readonly Brush Green = MakeBrush(0x0F, 0x7B, 0x0F);
         private static readonly Brush Orange = MakeBrush(0xB0, 0x6A, 0x00);
         private static readonly Brush Red = MakeBrush(0xC4, 0x2B, 0x1C);
+        private static readonly Brush BarOff = MakeBrush(0xD2, 0xD2, 0xD2);
 
         private readonly Dictionary<string, CardLabels> _cards = new Dictionary<string, CardLabels>();
         private readonly AdbClient _adb = new AdbClient();
@@ -37,6 +41,11 @@ namespace AdbDeviceVitals
         private readonly SmsInboxService _smsService;
         private readonly UsbTetherWatchdog _usbWatchdog = new UsbTetherWatchdog();
         private readonly DispatcherTimer _timer;
+        private readonly PublicIpService _publicIp = new PublicIpService();
+        private readonly DispatcherTimer _publicIpTimer;
+        private readonly DispatcherTimer _publicIpDebounce;
+        private readonly DispatcherTimer _broadnetTimer;
+        private readonly BroadnetSessionService _broadnet = new BroadnetSessionService();
 
         private WF.NotifyIcon _tray;
         private SmsWindow _smsWindow;
@@ -63,29 +72,97 @@ namespace AdbDeviceVitals
         private bool _exitingForUpdate;
         private DateTime _lastLog = DateTime.MinValue;
         private DateTime _lastThermalAlert = DateTime.MinValue;
+        private NetworkAddressChangedEventHandler _networkChangedHandler;
+        private CancellationTokenSource _publicIpCancellation;
+        private bool _publicIpQueryRunning;
+        private string _publicIpv4 = "";
+        private string _publicIpv6 = "";
+        private DateTime _publicIpCheckedAt = DateTime.MinValue;
+        private NetworkDetailsWindow _networkDetailsWindow;
+        private BatteryDetailsWindow _batteryDetailsWindow;
+        private BroadnetTrafficWindow _broadnetTrafficWindow;
+        private BroadnetTraffic _lastBroadnetTraffic;
+        private DateTime _broadnetCheckedAt = DateTime.MinValue;
+        private DeviceSnapshot _lastSnapshot;
 
         public MainWindow()
         {
             InitializeComponent();
             _monitor = new DeviceMonitor(_adb);
             _smsService = new SmsInboxService(_adb);
+            _broadnet.Initialize(AppSettings.ConfigDirectory);
 
-            _cards["network"] = new CardLabels(CardNetworkValue, CardNetworkDetail);
-            _cards["hotspot"] = new CardLabels(CardHotspotValue, CardHotspotDetail);
-            _cards["battery"] = new CardLabels(CardBatteryValue, CardBatteryDetail);
-            _cards["thermal"] = new CardLabels(CardThermalValue, CardThermalDetail);
             _cards["traffic"] = new CardLabels(CardTrafficValue, CardTrafficDetail);
-            _cards["device"] = new CardLabels(CardDeviceValue, CardDeviceDetail);
 
             _timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2.5) };
             _timer.Tick += async delegate { await RefreshSnapshot(false); };
 
+            // 出口 IP 与 ADB 采集解耦：低频轮询 + 网络地址变化后去抖 2 秒再查。
+            _publicIpTimer = new DispatcherTimer { Interval = TimeSpan.FromMinutes(10) };
+            _publicIpTimer.Tick += delegate { _ = RefreshPublicIpAsync(); };
+            _publicIpDebounce = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
+            _publicIpDebounce.Tick += delegate { _publicIpDebounce.Stop(); _ = RefreshPublicIpAsync(); };
+            // 广电余量：每 10 分钟静默刷新一次（有登录态才工作），与人工点击共用服务层闸门。
+            _broadnetTimer = new DispatcherTimer { Interval = TimeSpan.FromMinutes(10) };
+            _broadnetTimer.Tick += delegate { _ = RefreshBroadnetSilentAsync(); };
+            _networkChangedHandler = delegate
+            {
+                Dispatcher.InvokeAsync(delegate
+                {
+                    if (_shutdownDone) return;
+                    _publicIpDebounce.Stop();
+                    _publicIpDebounce.Start();
+                });
+            };
+            NetworkChange.NetworkAddressChanged += _networkChangedHandler;
+
             Closing += OnClosing;
+            // 按 Alt 会把焦点框画出来（见 App.RegisterFocusVisualPolicy）：构造后先清一次，
+            // 窗口 Loaded 时由 App 的全局处理器再清一遍模板展开后的完整可视树。
+            App.SuppressFocusVisuals(this);
+            // 见 FixWindowBorderColor：Mica 自定义标题栏的顶部细边框是半透明的，
+            // 且 DWM 会在窗口激活 / 最小化恢复时重新合成，所以这些时机都要重设一次。
+            EventHandler refreshBorder = delegate { FixWindowBorderColor(); };
+            SourceInitialized += refreshBorder;
+            ContentRendered += refreshBorder;
+            Activated += refreshBorder;
+            Deactivated += refreshBorder;
+            StateChanged += refreshBorder;
+            // Alt 会让 DWM 重新合成边框，顺手再刷一次浅色边框，避免透明底色透出深色。
+            PreviewKeyDown += delegate(object sender, KeyEventArgs e)
+            {
+                if (e.Key == Key.System &&
+                    (e.SystemKey == Key.LeftAlt || e.SystemKey == Key.RightAlt))
+                    FixWindowBorderColor();
+            };
             RefreshSmsPreview();
         }
 
+        [DllImport("dwmapi.dll", PreserveSig = true)]
+        private static extern int DwmSetWindowAttribute(IntPtr hwnd, int attribute, ref int value, int size);
+
+        /// <summary>
+        /// ExtendsContentIntoTitleBar + Mica 时，DWM 在窗口最上沿保留的 1~2px 细边框是半透明的，
+        /// 窗口背后有深色窗口或壁纸时会透出一条「黑线」，且随窗口激活 / 移动偶发。
+        /// 把 DWMWA_BORDER_COLOR 显式刷成窗口底色（不透明浅灰），应用侧内容一行都不用改。
+        /// 老系统不支持该属性时返回失败，直接忽略即可。
+        /// </summary>
+        private void FixWindowBorderColor()
+        {
+            try
+            {
+                IntPtr hwnd = new WindowInteropHelper(this).Handle;
+                if (hwnd == IntPtr.Zero) return;
+                int color = 0x00F3F3F3; // COLORREF 0x00BBGGRR，与浅色窗口背景一致
+                DwmSetWindowAttribute(hwnd, 34, ref color, sizeof(int));
+            }
+            catch (DllNotFoundException) { }
+            catch (EntryPointNotFoundException) { }
+        }
+
         /// <summary>托盘、定时器与首次采集由 App 在启动完成后调用；测试可只构造窗口不启动后台。</summary>
-        public void StartBackgroundWork()
+        /// <param name="skipBroadnetAuto">自检模式：后台不自动驱动广电 WebView，交给自检链路独占。</param>
+        public void StartBackgroundWork(bool skipBroadnetAuto = false)
         {
             if (_backgroundStarted) return;
             _backgroundStarted = true;
@@ -96,6 +173,14 @@ namespace AdbDeviceVitals
                 Notify("配置文件", "无法读取或写入配置文件，已临时使用默认设置：" + configError, WF.ToolTipIcon.Warning);
 
             _timer.Start();
+            _publicIpTimer.Start();
+            if (!skipBroadnetAuto)
+            {
+                _broadnetTimer.Start();
+                // 有登录快照就后台自己取一次余量；没有就保持卡片上的「点击查询」，不弹窗。
+                _ = RefreshBroadnetSilentAsync();
+            }
+            _ = RefreshPublicIpAsync();
             RefreshSmsPreview();
             StartInitialWork();
         }
@@ -122,6 +207,7 @@ namespace AdbDeviceVitals
             menu.Items.Add("立即刷新", null, async delegate { await RefreshSnapshot(true); });
             menu.Items.Add("近期短信", null, delegate { OpenSmsWindow(); });
             menu.Items.Add("复制最新验证码", null, delegate { CopyLatestSmsCode(); });
+            menu.Items.Add("广电流量查询", null, delegate { _ = OpenBroadnetSafe(); });
             menu.Items.Add("打开日志目录", null, delegate { OpenLogDirectory(); });
             menu.Items.Add(new WF.ToolStripSeparator());
             menu.Items.Add("退出", null, delegate { RequestExit(); });
@@ -148,6 +234,20 @@ namespace AdbDeviceVitals
             if (_shutdownDone) return;
             _shutdownDone = true;
             _timer.Stop();
+            _publicIpTimer.Stop();
+            _publicIpDebounce.Stop();
+            _broadnetTimer.Stop();
+            if (_networkChangedHandler != null)
+            {
+                NetworkChange.NetworkAddressChanged -= _networkChangedHandler;
+                _networkChangedHandler = null;
+            }
+            if (_publicIpCancellation != null)
+            {
+                _publicIpCancellation.Cancel();
+                _publicIpCancellation.Dispose();
+                _publicIpCancellation = null;
+            }
             CancelUsbTethering();
             CancelUsbTetherWatchdog();
             CancelPcHotspot();
@@ -156,6 +256,22 @@ namespace AdbDeviceVitals
                 try { _smsWindow.Close(); } catch { }
                 _smsWindow = null;
             }
+            if (_networkDetailsWindow != null)
+            {
+                try { _networkDetailsWindow.Close(); } catch { }
+                _networkDetailsWindow = null;
+            }
+            if (_batteryDetailsWindow != null)
+            {
+                try { _batteryDetailsWindow.Close(); } catch { }
+                _batteryDetailsWindow = null;
+            }
+            if (_broadnetTrafficWindow != null)
+            {
+                try { _broadnetTrafficWindow.Close(); } catch { }
+                _broadnetTrafficWindow = null;
+            }
+            _broadnet.Shutdown();
             if (_tray != null)
             {
                 _tray.Visible = false;
@@ -206,6 +322,7 @@ namespace AdbDeviceVitals
 
         private void UpdateUi(DeviceSnapshot s)
         {
+            _lastSnapshot = s;
             _needsDeviceChoice = s.NeedsDeviceSelection;
             ConnectionStatus.Cursor = _needsDeviceChoice ? Cursors.Hand : Cursors.Arrow;
             if (!s.Connected)
@@ -214,24 +331,23 @@ namespace AdbDeviceVitals
                     ? (s.PreferredSerialMissing ? "预设设备未连接 · 点此重新选择" : "检测到多台设备 · 点此指定")
                     : s.Error;
                 ConnectionStatus.Foreground = Orange;
-                SetCard("device", "未连接",
-                    s.NeedsDeviceSelection ? "请在设置中指定用于网络共享的设备" : "请检查 USB 调试和设备授权");
+                ApplySignal(GradeSignal(s));
+                PushDetails();
                 return;
             }
 
             ConnectionStatus.Text = "● 设备在线";
             ConnectionStatus.Foreground = Green;
-            SetCard("network", SafeText(s.NetworkType, "未知网络"), SafeText(s.OperatorName, "未知运营商") + "  ·  " + FormatSignal(s));
-            SetCard("hotspot", TetheringTitle(s), TetheringDetail(s));
-            SetCard("battery", s.BatteryLevel.HasValue ? s.BatteryLevel.Value + "%" : "—", s.BatteryStatus + "  ·  " + PowerSourceName(s) + "  ·  " + Voltage(s.BatteryVoltageV));
-            SetCard("thermal", Temperature(s.BatteryTemperatureC), "系统热状态：" + ThermalName(s.ThermalStatus));
-            SetCard("traffic", "↓ " + s.DownloadMbps.ToString("0.00", CultureInfo.InvariantCulture) + " Mbps",
-                "↑ " + s.UploadMbps.ToString("0.00", CultureInfo.InvariantCulture) + " Mbps  ·  " + SafeText(s.UpstreamInterface, "自动接口"));
-            string capacity = s.LearnedCapacityMah.HasValue
-                ? s.LearnedCapacityMah.Value.ToString("0", CultureInfo.InvariantCulture) + " mAh 学习容量"
-                : "容量数据不可用";
-            SetCard("device", SafeText(s.DeviceModel, "Android Device"), capacity + "  ·  " + ShortSerial(s.DeviceSerial));
+            // 蜂窝网络卡片只给信号结论，型号 / 运营商 / RSRP / SINR / 出口 IP 都在详情弹窗里。
+            ApplySignal(GradeSignal(s));
+            // 电池卡片常驻电量与温度两个结论；供电、电压、热状态、健康度、学习容量在 ⓘ 打开的电池详情弹窗。
+            CardBatteryValue.Text = s.BatteryLevel.HasValue ? s.BatteryLevel.Value + "%" : "—";
+            CardTemperatureValue.Text = BatteryFormat.Temperature(s.BatteryTemperatureC);
+            // 上下行速率并入「蜂窝网络」卡片；共享明细收进该卡右上角 ⓘ 打开的网络详情弹窗。
+            // 界面按字节速率显示（KB/s、MB/s）；采集与 CSV 日志仍是 Mbps。
+            SetCard("traffic", "↓ " + FormatSpeed(s.DownloadMbps), "↑ " + FormatSpeed(s.UploadMbps));
             Chart.AddSample(s.BatteryTemperatureC, s.RsrpDbm);
+            PushDetails();
         }
 
         private void CheckAlerts(DeviceSnapshot s)
@@ -252,7 +368,7 @@ namespace AdbDeviceVitals
             }
             else if (s.ThermalStatus.HasValue && s.ThermalStatus.Value >= 3)
             {
-                Notify("系统触发热限制", "当前热状态：" + ThermalName(s.ThermalStatus), WF.ToolTipIcon.Warning);
+                Notify("系统触发热限制", "当前热状态：" + BatteryFormat.ThermalName(s.ThermalStatus), WF.ToolTipIcon.Warning);
                 _lastThermalAlert = DateTime.Now;
             }
         }
@@ -379,6 +495,184 @@ namespace AdbDeviceVitals
             _smsWindow.Show();
         }
 
+        /// <summary>
+        /// 广电套餐余量入口。没有登录态时由服务弹出 WebView 让用户自己登录，
+        /// 检测到登录后窗口自动关闭；拿到登录态后从营业厅当前页读文本。
+        /// 这一步只做「能不能拿到登录态 + 页面原文」的闭环，解析与展示留到后续迭代。
+        /// </summary>
+        /// <summary>仅供 --broadnet-selftest 自检调用：与主菜单完全同一条链路。</summary>
+        internal void RunBroadnetSelfTest()
+        {
+            _ = OpenBroadnetSafe();
+        }
+
+        /// <summary>
+        /// 仅供 --broadnet-traffic-test 自检：等登录态就绪后读一次套餐余量，
+        /// 把结果格式化写进 trace，便于无人值守地验证提取链路。
+        /// </summary>
+        /// <summary>自检专用：只确保登录态，不读流量，避免与 OpenBroadnetAsync 并发操作 WebView2。</summary>
+        internal async System.Threading.Tasks.Task RunBroadnetLoginOnlyAsync()
+        {
+            _broadnet.Trace("login-selftest: ensuring login");
+            bool ok = await _broadnet.EnsureLoggedInAsync();
+            _broadnet.Trace("login-selftest: result=" + ok);
+        }
+
+        internal async System.Threading.Tasks.Task RunBroadnetTrafficTestAsync()
+        {
+            _broadnet.Trace("traffic-selftest: waiting for login");
+            for (int i = 0; i < 40 && !_broadnet.IsLoggedIn; i++)
+                await System.Threading.Tasks.Task.Delay(1000);
+            if (!_broadnet.IsLoggedIn)
+            {
+                _broadnet.Trace("traffic-selftest: NOT logged in, abort");
+                return;
+            }
+            _broadnet.Trace("traffic-selftest: calling ReadTrafficAsync");
+            BroadnetTraffic traffic = await _broadnet.ReadTrafficAsync();
+            _broadnet.Trace("traffic-selftest: got traffic=" + (traffic == null ? "null" : traffic.Packages.Count + "pkgs"));
+            ApplyBroadnetTraffic(traffic);
+            _broadnet.Trace("traffic-selftest: " + FormatBroadnetTraffic(traffic).Replace("\n", " | "));
+        }
+
+        private async Task OpenBroadnetSafe()
+        {
+            _broadnet.Trace("menu click -> OpenBroadnet");
+            try
+            {
+                await OpenBroadnetAsync();
+            }
+            catch (Exception ex)
+            {
+                _broadnet.Trace("OpenBroadnetAsync THREW: " + ex);
+                Notify("广电流量查询", "出错：" + ex.Message, WF.ToolTipIcon.Error);
+            }
+        }
+
+        private async Task OpenBroadnetAsync()
+        {
+            BroadnetTraffic traffic = await _broadnet.EnsureAndReadTrafficAsync();
+            if (!_broadnet.IsLoggedIn)
+            {
+                ApplyBroadnetPrompt();
+                Notify("广电流量查询", _broadnet.Status, WF.ToolTipIcon.Info);
+                return;
+            }
+            ApplyBroadnetTraffic(traffic);
+            string summary = FormatBroadnetTraffic(traffic);
+            if (!string.IsNullOrEmpty(summary)) Notify("广电套餐余量", summary, WF.ToolTipIcon.Info);
+        }
+
+        /// <summary>
+        /// 后台静默刷新（启动一次 + 每 10 分钟）：有登录态就自己取，不打扰用户；
+        /// 会话过期则把卡片退回「点击查询」，其余失败保留上次读数，不误清成过期态。
+        /// </summary>
+        private async Task RefreshBroadnetSilentAsync()
+        {
+            if (_shutdownDone) return;
+            try
+            {
+                BroadnetTraffic traffic = await _broadnet.RefreshTrafficSilentlyAsync();
+                if (traffic != null)
+                {
+                    ApplyBroadnetTraffic(traffic);
+                }
+                else if (_broadnet.LastAttemptExpired)
+                {
+                    ApplyBroadnetPrompt();
+                    _broadnet.Trace("silent refresh -> expired, card reset to prompt");
+                }
+                // 其它失败（网络抖动 / 超时）：保留卡片上的上次读数，等下一个周期。
+            }
+            catch (Exception ex)
+            {
+                _broadnet.Trace("RefreshBroadnetSilentAsync THREW: " + ex);
+            }
+        }
+
+        /// <summary>登录态不可用时卡片回到初始提示，引导用户点击走人工登录。</summary>
+        private void ApplyBroadnetPrompt()
+        {
+            ApplyBroadnetCard("点击查询", "中国广电 · 点击登录查询");
+            _lastBroadnetTraffic = null;
+            if (_broadnetTrafficWindow != null && _broadnetTrafficWindow.IsVisible)
+                _broadnetTrafficWindow.Apply((BroadnetTraffic)null);
+        }
+
+        /// <summary>把读到的套餐余量写进第二张卡片，并同步刷新已打开的详情窗。</summary>
+        private void ApplyBroadnetTraffic(BroadnetTraffic traffic)
+        {
+            if (traffic == null)
+            {
+                BroadnetRemainValue.Text = "读取失败";
+                BroadnetBalanceValue.Text = _broadnet.Status;
+                return;
+            }
+            _lastBroadnetTraffic = traffic;
+            _broadnetCheckedAt = DateTime.Now;
+            ApplyBroadnetCard(
+                BroadnetRemainSummary(traffic),
+                "话费 " + (string.IsNullOrEmpty(traffic.Balance) ? "—" : traffic.Balance + " 元"));
+            if (_broadnetTrafficWindow != null && _broadnetTrafficWindow.IsVisible)
+                _broadnetTrafficWindow.Apply(traffic);
+        }
+
+        /// <summary>卡片主读数：只累计还能用的包，按 G 求和；显示成一行的「xx G」。</summary>
+        internal static string BroadnetRemainSummary(BroadnetTraffic traffic)
+        {
+            if (traffic == null || traffic.Packages.Count == 0) return "暂无余量";
+            double total = 0;
+            bool any = false;
+            foreach (BroadnetPackage pkg in traffic.Packages)
+            {
+                double value;
+                // DOM 兜底读到的是带单位的文本（如 "85.4 G"），兼容 Android/网页两种格式。
+                string raw = (pkg.Remain ?? string.Empty).Trim();
+                int space = raw.IndexOf(' ');
+                if (space > 0) raw = raw.Substring(0, space);
+                if (!double.TryParse(raw, NumberStyles.Float, CultureInfo.InvariantCulture, out value) || value <= 0)
+                    continue;
+                total += value;
+                any = true;
+            }
+            return any
+                ? total.ToString("0.##", CultureInfo.InvariantCulture) + " G"
+                : "0 G";
+        }
+
+        /// <summary>基础类型参数便于渲染测试用反射直接填样例文案。</summary>
+        private void ApplyBroadnetCard(string remain, string balance)
+        {
+            BroadnetRemainValue.Text = remain;
+            BroadnetBalanceValue.Text = balance;
+        }
+
+        /// <summary>把套餐余量拼成气泡可读摘要：只留有剩余的包 + 话费，避免文本过长。</summary>
+        private static string FormatBroadnetTraffic(BroadnetTraffic traffic)
+        {
+            if (traffic == null || traffic.Packages.Count == 0)
+                return "已登录，但没读到套餐余量；请确认能打开个人中心页。";
+
+            System.Text.StringBuilder sb = new System.Text.StringBuilder();
+            if (!string.IsNullOrEmpty(traffic.Balance))
+                sb.Append("话费余额 ").Append(traffic.Balance).Append(" 元\n");
+            int shown = 0;
+            foreach (BroadnetPackage pkg in traffic.Packages)
+            {
+                // 结转的过期包（剩余 0）不展示，只留真正还能用的流量。
+                double remain;
+                if (!double.TryParse(pkg.Remain, System.Globalization.NumberStyles.Float,
+                        System.Globalization.CultureInfo.InvariantCulture, out remain) || remain <= 0)
+                    continue;
+                string name = pkg.Name.Length > 16 ? pkg.Name.Substring(0, 16) + "…" : pkg.Name;
+                sb.Append(name).Append(" 剩余 ").Append(pkg.Remain).Append(' ').Append(pkg.Unit)
+                  .Append(" / 共 ").Append(pkg.Total).Append('\n');
+                shown++;
+            }
+            if (shown == 0) sb.Append("当前没有可用流量包（剩余均为 0）\n");
+            return sb.ToString().TrimEnd('\n');
+        }
+
         private void CopyLatestSmsCode()
         {
             SmsMessage[] messages = _smsService.Snapshot();
@@ -398,6 +692,216 @@ namespace AdbDeviceVitals
                 return;
             }
             Notify("没有可复制的验证码", "本次运行期间收到的短信里没有检测到验证码。", WF.ToolTipIcon.Info);
+        }
+
+        /// <summary>
+        /// 出口 IP 独立于 ADB 采集：启动、网络地址变化、每 10 分钟各一次。
+        /// 查询失败时保留上一次结果，避免离线时卡片来回闪烁。
+        /// </summary>
+        private async Task RefreshPublicIpAsync()
+        {
+            if (_publicIpQueryRunning || _shutdownDone) return;
+            _publicIpQueryRunning = true;
+            CancellationTokenSource source = new CancellationTokenSource();
+            _publicIpCancellation = source;
+            try
+            {
+                PublicIpResult result = await _publicIp.QueryAsync(source.Token);
+                if (!source.IsCancellationRequested && !_shutdownDone)
+                    ApplyPublicIp(result.Ipv4, result.Ipv6, result.CheckedAt);
+            }
+            catch (OperationCanceledException) { }
+            catch { /* 离线或回显服务不可达：保留上一次结果 */ }
+            finally
+            {
+                _publicIpQueryRunning = false;
+                if (ReferenceEquals(_publicIpCancellation, source)) _publicIpCancellation = null;
+                source.Dispose();
+            }
+        }
+
+        /// <summary>参数是基础类型，便于渲染测试用反射直接填充样例地址。</summary>
+        private void ApplyPublicIp(string ipv4, string ipv6, DateTime checkedAt)
+        {
+            _publicIpv4 = ipv4 ?? "";
+            _publicIpv6 = ipv6 ?? "";
+            _publicIpCheckedAt = checkedAt;
+            PushDetails();
+        }
+
+        private void NetworkCard_MouseEnter(object sender, MouseEventArgs e)
+        {
+            NetworkInfoButton.Visibility = Visibility.Visible;
+        }
+
+        private void NetworkCard_MouseLeave(object sender, MouseEventArgs e)
+        {
+            NetworkInfoButton.Visibility = Visibility.Hidden;
+        }
+
+        private void BroadnetCard_MouseEnter(object sender, MouseEventArgs e)
+        {
+            BroadnetInfoButton.Visibility = Visibility.Visible;
+        }
+
+        private void BroadnetCard_MouseLeave(object sender, MouseEventArgs e)
+        {
+            BroadnetInfoButton.Visibility = Visibility.Hidden;
+        }
+
+        private void BatteryCard_MouseEnter(object sender, MouseEventArgs e)
+        {
+            BatteryInfoButton.Visibility = Visibility.Visible;
+        }
+
+        private void BatteryCard_MouseLeave(object sender, MouseEventArgs e)
+        {
+            BatteryInfoButton.Visibility = Visibility.Hidden;
+        }
+
+        private void NetworkInfo_Click(object sender, MouseButtonEventArgs e)
+        {
+            OpenNetworkDetails(false);
+        }
+
+        /// <summary>点卡片任意位置等同「广电流量查询」：无登录态弹 WebView，有则刷新读数。</summary>
+        private void BroadnetCard_Click(object sender, MouseButtonEventArgs e)
+        {
+            _ = OpenBroadnetSafe();
+        }
+
+        private void BroadnetInfo_Click(object sender, MouseButtonEventArgs e)
+        {
+            OpenBroadnetTrafficDetails();
+        }
+
+        /// <summary>第二张卡片的 ⓘ 打开套餐明细；重复点击只激活已有窗口。</summary>
+        private void OpenBroadnetTrafficDetails()
+        {
+            if (_broadnetTrafficWindow != null && _broadnetTrafficWindow.IsVisible)
+            {
+                _broadnetTrafficWindow.Activate();
+                return;
+            }
+            _broadnetTrafficWindow = new BroadnetTrafficWindow(
+                delegate { _ = OpenBroadnetSafe(); });
+            if (IsVisible) _broadnetTrafficWindow.Owner = this;
+            _broadnetTrafficWindow.Closed += delegate { _broadnetTrafficWindow = null; };
+            _broadnetTrafficWindow.Show();
+            if (_lastBroadnetTraffic != null) _broadnetTrafficWindow.Apply(_lastBroadnetTraffic);
+        }
+
+        private void BatteryInfo_Click(object sender, MouseButtonEventArgs e)
+        {
+            OpenBatteryDetails();
+        }
+
+        /// <summary>「蜂窝网络」卡片的 ⓘ 打开网络详情；需要时定位到网络共享分组。</summary>
+        private void OpenNetworkDetails(bool focusTethering)
+        {
+            if (_networkDetailsWindow != null && _networkDetailsWindow.IsVisible)
+            {
+                _networkDetailsWindow.Activate();
+                if (focusTethering) _networkDetailsWindow.FocusTethering();
+                return;
+            }
+            _networkDetailsWindow = new NetworkDetailsWindow { Owner = this };
+            _networkDetailsWindow.Closed += delegate { _networkDetailsWindow = null; };
+            _networkDetailsWindow.Show();
+            PushDetails();
+            if (focusTethering) _networkDetailsWindow.FocusTethering();
+        }
+
+        /// <summary>第三张卡片的 ⓘ 打开电池详情；重复点击只激活已有窗口。</summary>
+        private void OpenBatteryDetails()
+        {
+            if (_batteryDetailsWindow != null && _batteryDetailsWindow.IsVisible)
+            {
+                _batteryDetailsWindow.Activate();
+                return;
+            }
+            _batteryDetailsWindow = new BatteryDetailsWindow { Owner = this };
+            _batteryDetailsWindow.Closed += delegate { _batteryDetailsWindow = null; };
+            _batteryDetailsWindow.Show();
+            PushDetails();
+        }
+
+        /// <summary>两个详情弹窗打开期间都跟随 2.5 秒采集和出口 IP 查询实时刷新。</summary>
+        private void PushDetails()
+        {
+            if (_networkDetailsWindow != null && _networkDetailsWindow.IsVisible)
+                _networkDetailsWindow.Apply(_lastSnapshot, _publicIpv4, _publicIpv6, _publicIpCheckedAt);
+            if (_batteryDetailsWindow != null && _batteryDetailsWindow.IsVisible)
+                _batteryDetailsWindow.Apply(_lastSnapshot);
+        }
+
+        private void ApplySignal(SignalVerdict verdict)
+        {
+            System.Windows.Controls.Border[] bars =
+            {
+                SignalBar1, SignalBar2, SignalBar3, SignalBar4, SignalBar5
+            };
+            for (int i = 0; i < bars.Length; i++)
+                bars[i].Background = i < verdict.Bars ? verdict.Brush : BarOff;
+        }
+
+        /// <summary>
+        /// 把 RSRP（有多强）与 SINR（有多干净）各映射到 0~4，取较差的一档，
+        /// 避免「信号强但干扰大」被误判成好信号；缺一项时只看另一项。
+        /// </summary>
+        private static SignalVerdict GradeSignal(DeviceSnapshot s)
+        {
+            if (s == null || !s.Connected)
+                return new SignalVerdict("设备未连接", Muted, 0);
+
+            int? rsrp = s.RsrpDbm.HasValue ? (int?)RsrpScore(s.RsrpDbm.Value) : null;
+            int? sinr = s.SinrDb.HasValue ? (int?)SinrScore(s.SinrDb.Value) : null;
+            if (!rsrp.HasValue && !sinr.HasValue)
+                return new SignalVerdict("信号未知", Muted, 0);
+
+            int score = 4;
+            if (rsrp.HasValue) score = Math.Min(score, rsrp.Value);
+            if (sinr.HasValue) score = Math.Min(score, sinr.Value);
+            switch (score)
+            {
+                case 4: return new SignalVerdict("信号极好", Green, 5);
+                case 3: return new SignalVerdict("信号良好", Green, 4);
+                case 2: return new SignalVerdict("信号一般", Orange, 3);
+                case 1: return new SignalVerdict("信号较弱", Red, 2);
+                default: return new SignalVerdict("信号很差", Red, 1);
+            }
+        }
+
+        private static int RsrpScore(int dbm)
+        {
+            if (dbm >= -80) return 4;
+            if (dbm >= -90) return 3;
+            if (dbm >= -105) return 2;
+            if (dbm >= -110) return 1;
+            return 0;
+        }
+
+        private static int SinrScore(int db)
+        {
+            if (db >= 20) return 4;
+            if (db >= 13) return 3;
+            if (db >= 5) return 2;
+            if (db >= 0) return 1;
+            return 0;
+        }
+
+        private sealed class SignalVerdict
+        {
+            public readonly string Title;
+            public readonly Brush Brush;
+            public readonly int Bars;
+
+            public SignalVerdict(string title, Brush brush, int bars)
+            {
+                Title = title;
+                Brush = brush;
+                Bars = bars;
+            }
         }
 
         private void SetCard(string key, string value, string detail)
@@ -792,64 +1296,18 @@ namespace AdbDeviceVitals
             return brush;
         }
 
-        private static string FormatSignal(DeviceSnapshot s)
+        /// <summary>界面按字节速率显示（KB / MB 以 1024 进制）；采集和 CSV 日志仍是 Mbps。</summary>
+        private static string FormatSpeed(double mbps)
         {
-            if (!s.RsrpDbm.HasValue) return "信号数据不可用";
-            string result = s.RsrpDbm.Value + " dBm";
-            if (s.SinrDb.HasValue) result += "  ·  SINR " + s.SinrDb.Value + " dB";
-            return result;
+            // Mbps 是采集侧由「字节差 / 秒 × 8 / 1e6」算出的，这里还原成字节 / 秒。
+            double bytesPerSecond = mbps * 1000000.0 / 8.0;
+            if (bytesPerSecond >= 1024.0 * 1024.0)
+                return (bytesPerSecond / (1024.0 * 1024.0)).ToString("0.00", CultureInfo.InvariantCulture) + " MB/s";
+            return (bytesPerSecond / 1024.0).ToString("0.0", CultureInfo.InvariantCulture) + " KB/s";
         }
 
-        private static string TetheringTitle(DeviceSnapshot value)
-        {
-            if (value.UsbTetheringActive && value.HotspotActive) return "USB + Wi-Fi";
-            if (value.UsbTetheringActive) return "USB 网络共享";
-            if (value.HotspotActive) return "Wi-Fi 热点";
-            return "未开启";
-        }
-
-        private static string TetheringDetail(DeviceSnapshot value)
-        {
-            if (!value.UsbTetheringActive && !value.HotspotActive) return "未检测到网络共享";
-
-            List<string> details = new List<string>();
-            if (!string.IsNullOrWhiteSpace(value.UpstreamInterface)) details.Add("上游 " + value.UpstreamInterface);
-            if (value.UsbTetheringActive && value.HotspotActive)
-            {
-                details.Add("USB " + value.UsbTetheringClients + " 台");
-                details.Add("Wi-Fi " + value.ConnectedClients + " 台");
-            }
-            else if (value.UsbTetheringActive)
-            {
-                details.Add(value.UsbTetheringClients + " 台设备");
-            }
-            else
-            {
-                details.Add(SafeText(value.HotspotBand, "Wi-Fi"));
-                details.Add(value.ConnectedClients + " 台设备");
-            }
-            return string.Join("  ·  ", details.ToArray());
-        }
-
-        private static string PowerSourceName(DeviceSnapshot value)
-        {
-            if (value.UsbPowered) return "USB 供电";
-            if (value.AcPowered) return "交流电充电";
-            if (value.WirelessPowered) return "无线充电";
-            return "电池供电";
-        }
-
-        private static string Temperature(double? value) { return value.HasValue ? value.Value.ToString("0.0") + " °C" : "—"; }
-        private static string Voltage(double? value) { return value.HasValue ? value.Value.ToString("0.000") + " V" : "电压未知"; }
-        private static string SafeText(string value, string fallback) { return string.IsNullOrWhiteSpace(value) ? fallback : value; }
-        private static string ShortSerial(string value) { return string.IsNullOrEmpty(value) ? "" : (value.Length <= 6 ? value : "…" + value.Substring(value.Length - 6)); }
-
-        private static string ThermalName(int? value)
-        {
-            if (!value.HasValue) return "未知";
-            string[] names = { "正常", "轻微", "中等", "严重", "临界", "紧急", "即将关机" };
-            return value.Value >= 0 && value.Value < names.Length ? names[value.Value] : value.Value.ToString();
-        }
+        // 电池字段的格式化统一放在 BatteryFormat（BatteryDetailsWindow.xaml.cs），
+        // 温度告警与电池详情弹窗共用一份文案；手机侧共享状态的格式化在网络详情弹窗里。
 
         private sealed class CardLabels
         {

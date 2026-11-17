@@ -3,29 +3,81 @@ using System.Globalization;
 using System.IO;
 using System.Text;
 using System.Text.RegularExpressions;
+using System.Threading;
 
 namespace AdbDeviceVitals.Services
 {
+    /// <summary>
+    /// 诊断日志。USB 共享、电脑热点和 ADB daemon 恢复会从不同后台线程同时写同一个文件，
+    /// 所以互斥锁必须是进程级的（旧版每个实例一把锁，等于没锁）；同时 File.AppendAllText
+    /// 只给 FileShare.Read，并发写会抛 IOException 并冒泡成「USB 网络共享」错误气泡。
+    /// 现在统一用 FileShare.ReadWrite 打开 + 短重试，日志写失败只丢这一行，绝不阻断业务。
+    /// </summary>
     public sealed class TetherLog
     {
-        private readonly object _gate = new object();
+        private static readonly object Gate = new object();
+        private const int Attempts = 4;
         private readonly string _path;
 
-        public TetherLog()
+        public TetherLog() : this(DefaultPath()) { }
+
+        /// <summary>测试可注入临时路径，避免碰用户真实的日志目录。</summary>
+        public TetherLog(string path)
         {
-            string directory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "AdbDeviceVitals", "logs");
-            Directory.CreateDirectory(directory);
-            _path = Path.Combine(directory, "tether.log");
+            _path = path;
         }
 
-        public string FilePath { get { return _path; } }
+        public string FilePath { get { return _path ?? string.Empty; } }
 
         public void Write(string message)
         {
-            string line = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff", CultureInfo.InvariantCulture) + " " + (message ?? string.Empty);
-            lock (_gate)
+            if (string.IsNullOrEmpty(_path)) return;
+            string line = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff", CultureInfo.InvariantCulture)
+                + " " + (message ?? string.Empty);
+            lock (Gate)
             {
-                File.AppendAllText(_path, line + Environment.NewLine, new UTF8Encoding(false));
+                for (int attempt = 0; attempt < Attempts; attempt++)
+                {
+                    try
+                    {
+                        string directory = Path.GetDirectoryName(_path);
+                        if (!string.IsNullOrEmpty(directory)) Directory.CreateDirectory(directory);
+                        using (FileStream stream = new FileStream(_path, FileMode.Append, FileAccess.Write,
+                            FileShare.ReadWrite | FileShare.Delete))
+                        using (StreamWriter writer = new StreamWriter(stream, new UTF8Encoding(false)))
+                        {
+                            writer.WriteLine(line);
+                        }
+                        return;
+                    }
+                    catch (IOException)
+                    {
+                        // 杀软扫描、旧版本进程或用户正用记事本查看时可能瞬时独占，重试几次。
+                        if (attempt == Attempts - 1) return;
+                    }
+                    catch (Exception)
+                    {
+                        // 日志永远不能让 USB 共享 / 热点 / 采集失败。
+                        return;
+                    }
+                    Thread.Sleep(10 * (attempt + 1));
+                }
+            }
+        }
+
+        private static string DefaultPath()
+        {
+            try
+            {
+                string directory = Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                    "AdbDeviceVitals", "logs");
+                Directory.CreateDirectory(directory);
+                return Path.Combine(directory, "tether.log");
+            }
+            catch
+            {
+                return null;
             }
         }
 

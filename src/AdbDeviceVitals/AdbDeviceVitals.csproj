@@ -14,8 +14,12 @@
     <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
     <!-- 整个程序只面向 Windows；WinForms 托盘与 WinRT 热点的平台标注会产生大量无意义噪音。 -->
     <NoWarn>$(NoWarn);CA1416</NoWarn>
+    <!-- WebView2Loader.dll 是原生库，单文件发布时必须解压到临时目录才能被加载。 -->
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="WPF-UI" Version="4.3.0" />
+    <!-- 中国广电网上营业厅登录页。版本对齐本机 Evergreen Runtime 的 Chromium 主版本。 -->
+    <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.4129.50" />
   </ItemGroup>
 </Project>

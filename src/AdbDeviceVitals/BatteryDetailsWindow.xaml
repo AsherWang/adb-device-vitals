@@ -1,0 +1,108 @@
+<ui:FluentWindow x:Class="AdbDeviceVitals.BatteryDetailsWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:ui="http://schemas.lepo.co/wpfui/2022/xaml"
+        Title="电池详情" Width="470" Height="450"
+        MinWidth="420" MinHeight="420"
+        WindowStartupLocation="CenterOwner" ShowInTaskbar="False"
+        ExtendsContentIntoTitleBar="True" WindowBackdropType="Mica"
+        FontFamily="Segoe UI" FontSize="13">
+    <Window.Resources>
+        <Style x:Key="LabelText" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="12" />
+            <Setter Property="Opacity" Value="0.62" />
+            <Setter Property="VerticalAlignment" Value="Center" />
+            <Setter Property="Margin" Value="0,0,0,4" />
+        </Style>
+        <Style x:Key="ValueText" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="12" />
+            <Setter Property="TextWrapping" Value="Wrap" />
+            <Setter Property="VerticalAlignment" Value="Center" />
+            <Setter Property="Margin" Value="0,0,0,4" />
+        </Style>
+    </Window.Resources>
+
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <ui:TitleBar Grid.Row="0" Title="电池详情" />
+
+        <ScrollViewer Grid.Row="1" Margin="20,6,20,8" VerticalScrollBarVisibility="Auto">
+            <StackPanel>
+                <Grid Margin="4,0,18,10">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <TextBlock Grid.Column="0" FontSize="11" Opacity="0.62" TextWrapping="Wrap" VerticalAlignment="Center"
+                               Text="电池与温度原始参数 · 每 2.5 秒随采集刷新" />
+                    <TextBlock Grid.Column="1" x:Name="SampleTimeText" Text="—" FontSize="11" Opacity="0.62"
+                               Margin="10,0,0,0" VerticalAlignment="Center" />
+                </Grid>
+
+                <ui:Card Margin="0,0,0,8" Padding="14,10">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="110" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                        </Grid.RowDefinitions>
+                        <TextBlock Grid.Row="0" Grid.Column="0" Grid.ColumnSpan="2" Text="电量与充电"
+                                   FontSize="14" FontWeight="SemiBold" Margin="0,0,0,10" />
+                        <TextBlock Grid.Row="1" Grid.Column="0" Text="电量" Style="{StaticResource LabelText}" />
+                        <TextBlock Grid.Row="1" Grid.Column="1" x:Name="LevelText" Text="—" Style="{StaticResource ValueText}" />
+                        <TextBlock Grid.Row="2" Grid.Column="0" Text="充电状态" Style="{StaticResource LabelText}" />
+                        <TextBlock Grid.Row="2" Grid.Column="1" x:Name="StatusText" Text="—" Style="{StaticResource ValueText}" />
+                        <TextBlock Grid.Row="3" Grid.Column="0" Text="供电方式" Style="{StaticResource LabelText}" />
+                        <TextBlock Grid.Row="3" Grid.Column="1" x:Name="PowerText" Text="—" Style="{StaticResource ValueText}" />
+                        <TextBlock Grid.Row="4" Grid.Column="0" Text="电压" Style="{StaticResource LabelText}" />
+                        <TextBlock Grid.Row="4" Grid.Column="1" x:Name="VoltageText" Text="—" Style="{StaticResource ValueText}" />
+                        <TextBlock Grid.Row="5" Grid.Column="0" Text="电池健康" Style="{StaticResource LabelText}" />
+                        <TextBlock Grid.Row="5" Grid.Column="1" x:Name="HealthText" Text="—" Style="{StaticResource ValueText}" />
+                    </Grid>
+                </ui:Card>
+
+                <ui:Card Margin="0,0,0,8" Padding="14,10">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="110" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                        </Grid.RowDefinitions>
+                        <TextBlock Grid.Row="0" Grid.Column="0" Grid.ColumnSpan="2" Text="温度与容量"
+                                   FontSize="14" FontWeight="SemiBold" Margin="0,0,0,10" />
+                        <TextBlock Grid.Row="1" Grid.Column="0" Text="电池温度" Style="{StaticResource LabelText}" />
+                        <TextBlock Grid.Row="1" Grid.Column="1" x:Name="TemperatureText" Text="—" Style="{StaticResource ValueText}" />
+                        <TextBlock Grid.Row="2" Grid.Column="0" Text="系统热状态" Style="{StaticResource LabelText}" />
+                        <TextBlock Grid.Row="2" Grid.Column="1" x:Name="ThermalText" Text="—" Style="{StaticResource ValueText}" />
+                        <TextBlock Grid.Row="3" Grid.Column="0" Text="学习容量" Style="{StaticResource LabelText}" />
+                        <TextBlock Grid.Row="3" Grid.Column="1" x:Name="CapacityText" Text="—" Style="{StaticResource ValueText}" />
+                    </Grid>
+                </ui:Card>
+
+                <TextBlock FontSize="11" Opacity="0.62" TextWrapping="Wrap"
+                           Text="电池温度达到 45 °C 或系统热状态进入「严重」以上时会在托盘提醒；温度与信号历史见主窗口曲线。" />
+            </StackPanel>
+        </ScrollViewer>
+
+        <StackPanel Grid.Row="2" Orientation="Horizontal" HorizontalAlignment="Right" Margin="20,0,20,18">
+            <Button Content="关闭" Width="78" Click="Close_Click" />
+        </StackPanel>
+    </Grid>
+</ui:FluentWindow>
