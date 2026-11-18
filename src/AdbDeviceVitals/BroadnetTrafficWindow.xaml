@@ -59,12 +59,12 @@
                                                 <RowDefinition Height="Auto" />
                                                 <RowDefinition Height="Auto" />
                                             </Grid.RowDefinitions>
-                                            <TextBlock Grid.Row="0" Text="{Binding Name}" FontSize="12" FontWeight="SemiBold"
+                                            <TextBlock Grid.Row="0" Text="{Binding Name, Mode=OneWay}" FontSize="12" FontWeight="SemiBold"
                                                        TextWrapping="Wrap" />
                                             <TextBlock Grid.Row="1" FontSize="11" Opacity="0.72" TextWrapping="Wrap" Margin="0,2,0,0">
-                                                <Run Text="剩余 " /><Run Text="{Binding Remain}" /><Run Text=" " /><Run Text="{Binding Unit}" />
-                                                <Run Text="  / 共 " /><Run Text="{Binding Total}" /><Run Text=" " /><Run Text="{Binding Unit}" />
-                                                <Run Text="  · 已用 " /><Run Text="{Binding Used}" />
+                                                <Run Text="剩余 " /><Run Text="{Binding Remain, Mode=OneWay}" /><Run Text=" " /><Run Text="{Binding Unit, Mode=OneWay}" />
+                                                <Run Text="  / 共 " /><Run Text="{Binding Total, Mode=OneWay}" /><Run Text=" " /><Run Text="{Binding Unit, Mode=OneWay}" />
+                                                <Run Text="  · 已用 " /><Run Text="{Binding Used, Mode=OneWay}" />
                                             </TextBlock>
                                         </Grid>
                                     </Border>

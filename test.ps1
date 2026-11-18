@@ -39,12 +39,13 @@ $hoverPng = Join-Path $artifacts 'wpf-main-hover.png'
 # Screenshot taken while Alt is held: guards against the dark bar under the title bar.
 $altPng = Join-Path $artifacts 'wpf-main-alt.png'
 $batteryPng = Join-Path $artifacts 'wpf-battery-details.png'
+$broadnetPng = Join-Path $artifacts 'wpf-broadnet-details.png'
 
 & $dotnet build (Join-Path $root 'tests\AdbDeviceVitals.RenderTest.csproj') -c Release -tl:off | Out-Null
 if ($LASTEXITCODE -ne 0) { throw "Render project build failed with exit code $LASTEXITCODE." }
-& $dotnet (Join-Path $testOutput 'RenderSmokeTest.dll') $mainPng $settingsPng $smsPng $detailsPng $hoverPng $altPng $batteryPng
+& $dotnet (Join-Path $testOutput 'RenderSmokeTest.dll') $mainPng $settingsPng $smsPng $detailsPng $hoverPng $altPng $batteryPng $broadnetPng
 if ($LASTEXITCODE -ne 0) { throw "Render smoke test failed with exit code $LASTEXITCODE." }
-$allPng = @($mainPng, $settingsPng, $smsPng, $detailsPng, $hoverPng, $altPng, $batteryPng)
+$allPng = @($mainPng, $settingsPng, $smsPng, $detailsPng, $hoverPng, $altPng, $batteryPng, $broadnetPng)
 foreach ($png in $allPng) {
     if (-not (Test-Path -LiteralPath $png)) { throw "Missing render output: $png" }
 }

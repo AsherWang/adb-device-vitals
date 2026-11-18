@@ -68,6 +68,9 @@ internal static class RenderSmokeTest
             RenderSms(_args[2]);
             RenderNetworkDetails(_args[3]);
             if (_args.Length > 6) RenderBatteryDetails(_args[6]);
+            // 广电详情窗：必须注入带套餐行的数据，覆盖 DataTemplate 的绑定（曾因
+            // Run.Text 默认 TwoWay 绑到只读属性抛 XamlParseException，窗口卡死）。
+            if (_args.Length > 7) RenderBroadnetDetails(_args[7]);
             _result = 0;
         }
         catch (Exception ex)
@@ -366,6 +369,32 @@ internal static class RenderSmokeTest
         for (int i = 0; i < children; i++)
             count += AssertNoFocusVisual(VisualTreeHelper.GetChild(root, i));
         return count;
+    }
+
+    /// <summary>广电套餐详情窗：用 ApplyCore 注入账户信息和多行套餐（基础类型，
+    /// 不需要构造 internal 的 BroadnetTraffic），强制 DataTemplate 绑定真正求值。</summary>
+    private static void RenderBroadnetDetails(string path)
+    {
+        BroadnetTrafficWindow window = Prepare(new BroadnetTrafficWindow(null));
+        string rows = "当月套餐|58.3|G|162|G|103.7\n"
+                    + "上月结转|0|G|91.9|G|91.9\n"
+                    + "赠送流量|12.1|G|20|G|7.9";
+        MethodInfo applyCore = typeof(BroadnetTrafficWindow).GetMethod("ApplyCore",
+            BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public);
+        if (applyCore == null) throw new MissingMethodException("BroadnetTrafficWindow.ApplyCore");
+        applyCore.Invoke(window, new object[] { "138****0000", "83.47", "16.43", "123.14 G", rows });
+        window.UpdateLayout();
+        Dispatcher.CurrentDispatcher.Invoke(DispatcherPriority.Render, new Action(delegate { }));
+
+        System.Windows.Controls.ItemsControl list =
+            NamedElement(window, "PackageList") as System.Windows.Controls.ItemsControl;
+        if (list == null || list.Items.Count != 3)
+            throw new InvalidOperationException("Broadnet detail should bind 3 package rows.");
+        System.Windows.Controls.TextBlock used =
+            NamedElement(window, "UsedText") as System.Windows.Controls.TextBlock;
+        if (used == null || used.Text != "123.14 G")
+            throw new InvalidOperationException("Broadnet detail should show monthly used traffic.");
+        Save(window, path);
     }
 
     private static T Prepare<T>(T window) where T : Window
