@@ -22,7 +22,7 @@ namespace AdbDeviceVitals
         {
             if (traffic == null)
             {
-                ApplyCore("", "", "", "");
+                ApplyCore("", "", "", "", "");
                 return;
             }
             List<string> rows = new List<string>();
@@ -35,15 +35,16 @@ namespace AdbDeviceVitals
             }
             // 号码统一打码，和登录窗 / 状态栏保持一致，详情窗不显示完整手机号。
             ApplyCore(BroadnetSessionService.MaskPhone(traffic.Phone ?? ""), traffic.Balance ?? "", traffic.MonthlySpend ?? "",
-                string.Join("\n", rows.ToArray()));
+                traffic.MonthlyUsed ?? "", string.Join("\n", rows.ToArray()));
         }
 
         /// <summary>参数是基础类型，便于渲染测试用反射直接填充套餐样例。</summary>
-        internal void ApplyCore(string phone, string balance, string spend, string rows)
+        internal void ApplyCore(string phone, string balance, string spend, string used, string rows)
         {
             PhoneText.Text = string.IsNullOrEmpty(phone) ? "—" : phone;
             BalanceText.Text = string.IsNullOrEmpty(balance) ? "—" : balance + " 元";
             SpendText.Text = string.IsNullOrEmpty(spend) ? "—" : spend + " 元";
+            UsedText.Text = string.IsNullOrEmpty(used) ? "—" : used;
 
             List<PackageRow> list = new List<PackageRow>();
             if (!string.IsNullOrEmpty(rows))

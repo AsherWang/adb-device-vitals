@@ -32,6 +32,7 @@
                             <RowDefinition Height="Auto" />
                             <RowDefinition Height="Auto" />
                             <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
                         </Grid.RowDefinitions>
                         <TextBlock Grid.Row="0" Grid.Column="0" Grid.ColumnSpan="2" Text="账户"
                                    FontSize="14" FontWeight="SemiBold" Margin="0,0,0,10" />
@@ -41,6 +42,8 @@
                         <TextBlock Grid.Row="2" Grid.Column="1" x:Name="BalanceText" Text="—" FontSize="12" Margin="0,0,0,4" />
                         <TextBlock Grid.Row="3" Grid.Column="0" Text="当月消费" FontSize="12" Opacity="0.62" Margin="0,0,0,4" />
                         <TextBlock Grid.Row="3" Grid.Column="1" x:Name="SpendText" Text="—" FontSize="12" Margin="0,0,0,4" />
+                        <TextBlock Grid.Row="4" Grid.Column="0" Text="本月已用" FontSize="12" Opacity="0.62" Margin="0,0,0,4" />
+                        <TextBlock Grid.Row="4" Grid.Column="1" x:Name="UsedText" Text="—" FontSize="12" Margin="0,0,0,4" />
                     </Grid>
                 </ui:Card>
 

@@ -504,7 +504,8 @@ namespace AdbDeviceVitals
                 BroadnetTraffic apiTraffic = ParseApiTraffic(resBody, billBody);
                 if (apiTraffic != null && apiTraffic.Packages.Count > 0)
                 {
-                    WriteTrace("traffic via API: " + apiTraffic.Packages.Count + " packages, balance=" + apiTraffic.Balance);
+                    WriteTrace("traffic via API: " + apiTraffic.Packages.Count + " packages, balance=" + apiTraffic.Balance
+                        + ", used=" + apiTraffic.MonthlyUsed);
                     _window.EndApiCapture();
                     return apiTraffic;
                 }
@@ -557,24 +558,31 @@ namespace AdbDeviceVitals
                     if (!TryGetProperty(data, "intfResultBean", out JsonElement bean)) bean = data;
                     if (!TryGetProperty(bean, "userResList", out list) || list.ValueKind != JsonValueKind.Array)
                         return null;
+                    double totalUsed = 0;
                     foreach (JsonElement item in list.EnumerateArray())
                     {
-                        JsonElement nameEl, highEl, balEl;
+                        JsonElement nameEl, highEl, balEl, addEl;
                         string name = TryGetProperty(item, "discntName", out nameEl)
                             ? (nameEl.GetString() ?? string.Empty) : string.Empty;
                         if (name.Length == 0) continue;
                         double high = TryGetProperty(item, "highFee", out highEl) ? Num(highEl) : 0;
                         double bal = TryGetProperty(item, "balance", out balEl) ? Num(balEl) : 0;
                         if (high <= 0 && bal <= 0) continue;
+                        // addupValue 是站点给出的「已用」（KB），实测恒等于 highFee-balance；
+                        // 优先用它，缺失时退回差值，避免站点改口径后拿不到已用。
+                        double used = TryGetProperty(item, "addupValue", out addEl) ? Num(addEl) : -1;
+                        if (used < 0) used = high > bal ? high - bal : 0;
+                        totalUsed += used;
                         result.Packages.Add(new BroadnetPackage
                         {
                             Name = name,
                             Total = G(high),
                             Remain = G(bal),
-                            Used = G(high > bal ? high - bal : 0),
+                            Used = G(used),
                             Unit = "G"
                         });
                     }
+                    result.MonthlyUsed = G(totalUsed);
                 }
             }
             catch
@@ -652,6 +660,14 @@ namespace AdbDeviceVitals
         {
             double g = bytes / 1048576.0;
             return g.ToString("0.##", CultureInfo.InvariantCulture);
+        }
+
+        /// <summary>从 DOM 文本（如 "58.3 G"）里剥出可解析的数字部分。</summary>
+        private static string NumText(string raw)
+        {
+            string text = (raw ?? string.Empty).Trim();
+            int space = text.IndexOf(' ');
+            return space > 0 ? text.Substring(0, space) : text;
         }
 
         // 实测（2026-11-16）：个人中心页 .number-order-package-detail 区块，
@@ -822,6 +838,7 @@ namespace AdbDeviceVitals
                     if (root.TryGetProperty("phone", out value)) result.Phone = value.GetString() ?? string.Empty;
                     if (root.TryGetProperty("balance", out value)) result.Balance = value.GetString() ?? string.Empty;
                     if (root.TryGetProperty("spend", out value)) result.MonthlySpend = value.GetString() ?? string.Empty;
+                    double totalUsed = 0;
                     JsonElement packages;
                     if (root.TryGetProperty("packages", out value) && value.ValueKind == JsonValueKind.Array)
                     {
@@ -833,9 +850,15 @@ namespace AdbDeviceVitals
                             if (item.TryGetProperty("remain", out packages)) pkg.Remain = packages.GetString() ?? string.Empty;
                             if (item.TryGetProperty("total", out packages)) pkg.Total = packages.GetString() ?? string.Empty;
                             if (item.TryGetProperty("unit", out packages)) pkg.Unit = packages.GetString() ?? string.Empty;
+                            double used;
+                            if (double.TryParse(NumText(pkg.Used), NumberStyles.Float, CultureInfo.InvariantCulture, out used)
+                                && used > 0) totalUsed += used;
                             result.Packages.Add(pkg);
                         }
                     }
+                    result.MonthlyUsed = totalUsed > 0
+                        ? totalUsed.ToString("0.##", CultureInfo.InvariantCulture) + " G"
+                        : string.Empty;
                 }
                 return result;
             }
@@ -884,6 +907,7 @@ namespace AdbDeviceVitals
         internal string Phone = string.Empty;
         internal string Balance = string.Empty;       // 话费余额，元
         internal string MonthlySpend = string.Empty;  // 当月消费，元
+        internal string MonthlyUsed = string.Empty;   // 本月已用流量，形如 "120.19 G"（各包 addupValue 之和）
         internal System.Collections.Generic.List<BroadnetPackage> Packages =
             new System.Collections.Generic.List<BroadnetPackage>();
     }

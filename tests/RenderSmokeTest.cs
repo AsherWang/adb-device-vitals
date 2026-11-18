@@ -133,6 +133,12 @@ internal static class RenderSmokeTest
             as System.Windows.Controls.TextBlock;
         if (balance == null || !balance.Text.Contains("话费"))
             throw new InvalidOperationException("Broadnet card should show phone balance.");
+        System.Windows.Controls.TextBlock used = NamedElement(window, "BroadnetUsedValue")
+            as System.Windows.Controls.TextBlock;
+        if (used == null) throw new MissingFieldException("BroadnetUsedValue");
+        used.Text = "本月已用 120.2 G";
+        if (used.Text.IndexOf("已用", StringComparison.Ordinal) < 0)
+            throw new InvalidOperationException("Broadnet card should show monthly used traffic.");
 
         Save(window, path);
 

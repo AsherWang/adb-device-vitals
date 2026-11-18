@@ -101,6 +101,9 @@
                                 <TextBlock x:Name="BroadnetBalanceValue" Text="中国广电 · 套餐余量" FontSize="13" Opacity="0.72"
                                            HorizontalAlignment="Center" Margin="0,4,0,0"
                                            TextTrimming="CharacterEllipsis" />
+                                <TextBlock x:Name="BroadnetUsedValue" Text="" FontSize="12" Opacity="0.62"
+                                           HorizontalAlignment="Center" Margin="0,3,0,0"
+                                           TextTrimming="CharacterEllipsis" />
                             </StackPanel>
                             <Border x:Name="BroadnetInfoButton" Width="20" Height="20"
                                     CornerRadius="10" BorderThickness="1" BorderBrush="#FF8A8A8A"

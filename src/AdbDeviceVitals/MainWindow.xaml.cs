@@ -594,6 +594,7 @@ namespace AdbDeviceVitals
         private void ApplyBroadnetPrompt()
         {
             ApplyBroadnetCard("点击查询", "中国广电 · 点击登录查询");
+            BroadnetUsedValue.Text = string.Empty;
             _lastBroadnetTraffic = null;
             if (_broadnetTrafficWindow != null && _broadnetTrafficWindow.IsVisible)
                 _broadnetTrafficWindow.Apply((BroadnetTraffic)null);
@@ -606,6 +607,7 @@ namespace AdbDeviceVitals
             {
                 BroadnetRemainValue.Text = "读取失败";
                 BroadnetBalanceValue.Text = _broadnet.Status;
+                BroadnetUsedValue.Text = string.Empty;
                 return;
             }
             _lastBroadnetTraffic = traffic;
@@ -613,6 +615,8 @@ namespace AdbDeviceVitals
             ApplyBroadnetCard(
                 BroadnetRemainSummary(traffic),
                 "话费 " + (string.IsNullOrEmpty(traffic.Balance) ? "—" : traffic.Balance + " 元"));
+            BroadnetUsedValue.Text = string.IsNullOrEmpty(traffic.MonthlyUsed)
+                ? string.Empty : "本月已用 " + traffic.MonthlyUsed;
             if (_broadnetTrafficWindow != null && _broadnetTrafficWindow.IsVisible)
                 _broadnetTrafficWindow.Apply(traffic);
         }
@@ -654,6 +658,8 @@ namespace AdbDeviceVitals
                 return "已登录，但没读到套餐余量；请确认能打开个人中心页。";
 
             System.Text.StringBuilder sb = new System.Text.StringBuilder();
+            if (!string.IsNullOrEmpty(traffic.MonthlyUsed))
+                sb.Append("本月已用 ").Append(traffic.MonthlyUsed).Append('\n');
             if (!string.IsNullOrEmpty(traffic.Balance))
                 sb.Append("话费余额 ").Append(traffic.Balance).Append(" 元\n");
             int shown = 0;
