@@ -376,13 +376,21 @@ internal static class RenderSmokeTest
     private static void RenderBroadnetDetails(string path)
     {
         BroadnetTrafficWindow window = Prepare(new BroadnetTrafficWindow(null));
-        string rows = "当月套餐|58.3|G|162|G|103.7\n"
-                    + "上月结转|0|G|91.9|G|91.9\n"
-                    + "赠送流量|12.1|G|20|G|7.9";
+        // 字段顺序：name|remain|unit|total|used
+        string rows = "当月套餐|58.3|G|162|103.7\n"
+                    + "上月结转|0|G|91.9|91.9\n"
+                    + "赠送流量|12.1|G|20|7.9";
         MethodInfo applyCore = typeof(BroadnetTrafficWindow).GetMethod("ApplyCore",
             BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public);
         if (applyCore == null) throw new MissingMethodException("BroadnetTrafficWindow.ApplyCore");
         applyCore.Invoke(window, new object[] { "138****0000", "83.47", "16.43", "123.14 G", rows });
+        // 用量统计区：24 小时样例 + 今日/本月/日均读数，强制自绘控件与文本渲染。
+        MethodInfo applyUsage = typeof(BroadnetTrafficWindow).GetMethod("ApplyUsageNumbers",
+            BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public);
+        if (applyUsage == null) throw new MissingMethodException("BroadnetTrafficWindow.ApplyUsageNumbers");
+        double[] hourly = new double[24];
+        hourly[9] = 1.2; hourly[12] = 4.5; hourly[20] = 2.3;
+        applyUsage.Invoke(window, new object[] { 3.4, 8.0, 1.6, hourly, 144, true });
         window.UpdateLayout();
         Dispatcher.CurrentDispatcher.Invoke(DispatcherPriority.Render, new Action(delegate { }));
 
@@ -394,6 +402,10 @@ internal static class RenderSmokeTest
             NamedElement(window, "UsedText") as System.Windows.Controls.TextBlock;
         if (used == null || used.Text != "123.14 G")
             throw new InvalidOperationException("Broadnet detail should show monthly used traffic.");
+        System.Windows.Controls.TextBlock today =
+            NamedElement(window, "UsageTodayText") as System.Windows.Controls.TextBlock;
+        if (today == null || today.Text != "3.4 G")
+            throw new InvalidOperationException("Broadnet detail should show today's usage.");
         Save(window, path);
     }
 

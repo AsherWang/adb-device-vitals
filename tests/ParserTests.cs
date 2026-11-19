@@ -25,6 +25,7 @@ internal static class ParserTests
         UsbTetherWatchdogTests();
         Updates();
         LogRobustness();
+        BroadnetUsageTests();
         Console.WriteLine(_failed == 0 ? "All parser tests passed." : _failed + " parser test(s) failed.");
         return _failed == 0 ? 0 : 1;
     }
@@ -450,6 +451,115 @@ internal static class ParserTests
         finally
         {
             try { Directory.Delete(directory, true); } catch { }
+        }
+    }
+
+    private static void BroadnetUsageTests()
+    {
+        const double G = 1048576.0;
+        DateTime day = new DateTime(2026, 11, 19);
+
+        // 1) 相邻同名包差分：累计值递增才记用量，得到本月记录 / 今日 / 按小时分布。
+        List<UsageSample> samples = new List<UsageSample>
+        {
+            Sample(day.AddHours(10), 10 * G, "当月套餐", 10 * G),
+            Sample(day.AddHours(10).AddMinutes(10), 12 * G, "当月套餐", 12 * G),
+            Sample(day.AddHours(10).AddMinutes(20), 12.5 * G, "当月套餐", 12.5 * G)
+        };
+        UsageStats stats = BroadnetUsageStore.Analyze(samples, day.AddHours(11));
+        Near(2.5, stats.MonthRecordedG, "usage month recorded by package delta");
+        Near(2.5, stats.TodayUsedG, "usage today");
+        Near(2.5, stats.HourlyG[10], "usage hourly bucket 10");
+        Near(12.5, stats.MonthAuthoritativeG, "usage authoritative cumulative");
+        Equal(3, stats.SampleCount, "usage sample count");
+        Equal(1, stats.CoveredDays, "usage covered days");
+        Equal(false, stats.HasGap, "usage no gap at 10min interval");
+
+        // 2) 包过期（结转包消失，累计总量下降）：同名包只记正增量，不出现负数。
+        List<UsageSample> expired = new List<UsageSample>
+        {
+            Sample(day.AddHours(9), 8 * G, "当月套餐", 5 * G, "结转包", 3 * G),
+            Sample(day.AddHours(9).AddMinutes(10), 6 * G, "当月套餐", 6 * G)
+        };
+        UsageStats expiredStats = BroadnetUsageStore.Analyze(expired, day.AddHours(10));
+        Near(1.0, expiredStats.MonthRecordedG, "usage expiring package ignores negative delta");
+        Equal(true, expiredStats.MonthRecordedG >= 0, "usage delta never negative");
+
+        // 3) 跨月重置：新周期累计从 0 重新涨，差分忽略负跳变。
+        List<UsageSample> reset = new List<UsageSample>
+        {
+            Sample(new DateTime(2026, 10, 31, 23, 50, 0), 90 * G, "当月套餐", 90 * G),
+            Sample(new DateTime(2026, 11, 1, 0, 0, 0), 0.5 * G, "当月套餐", 0.5 * G),
+            Sample(new DateTime(2026, 11, 1, 0, 10, 0), 2 * G, "当月套餐", 2 * G)
+        };
+        UsageStats resetStats = BroadnetUsageStore.Analyze(reset, new DateTime(2026, 11, 1, 1, 0, 0));
+        Near(1.5, resetStats.MonthRecordedG, "usage ignores cross-month reset drop");
+
+        // 4) 登录中断档（间隔 > 30min）标记为空洞。
+        List<UsageSample> gap = new List<UsageSample>
+        {
+            Sample(day.AddHours(8), 1 * G, "当月套餐", 1 * G),
+            Sample(day.AddHours(8).AddMinutes(45), 3 * G, "当月套餐", 3 * G)
+        };
+        Equal(true, BroadnetUsageStore.Analyze(gap, day.AddHours(10)).HasGap, "usage gap flagged over 30min");
+
+        // 4b) 站点风控时的坏采样（累计 0 / 无包）被剔除，不制造巨量假增量。
+        List<UsageSample> withBad = new List<UsageSample>
+        {
+            Sample(day.AddHours(10), 10 * G, "当月套餐", 10 * G),
+            Sample(day.AddHours(10).AddMinutes(10), 0, new object[0]),
+            Sample(day.AddHours(10).AddMinutes(20), 12 * G, "当月套餐", 12 * G)
+        };
+        UsageStats cleaned = BroadnetUsageStore.Analyze(withBad, day.AddHours(11));
+        Near(2.0, cleaned.MonthRecordedG, "usage ignores bad zero-package samples");
+        Equal(2, cleaned.SampleCount, "usage bad samples excluded from count");
+
+        // 5) 落盘 + 跨月文件隔离 + 文件独占时不抛异常。
+        string directory = Path.Combine(Path.GetTempPath(), "usage-test-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            BroadnetUsageStore store = new BroadnetUsageStore(directory);
+            store.Append(new DateTime(2026, 11, 19, 10, 0, 0), 10 * G, "82.50",
+                new List<KeyValuePair<string, double>> { new KeyValuePair<string, double>("当月套餐", 10 * G) });
+            store.Append(new DateTime(2026, 12, 1, 10, 0, 0), 1 * G, "80.00",
+                new List<KeyValuePair<string, double>> { new KeyValuePair<string, double>("当月套餐", 1 * G) });
+            Equal(1, store.ReadMonth(2026, 11).Count, "usage november file isolated");
+            Equal(1, store.ReadMonth(2026, 12).Count, "usage december file isolated");
+            Equal("当月套餐", store.ReadMonth(2026, 11)[0].Packages[0].Name, "usage package round-trip");
+            Near(10 * G, store.ReadMonth(2026, 11)[0].UsedKb, "usage kb round-trip");
+            string file = Path.Combine(directory, "2026-11.jsonl");
+            using (FileStream hold = new FileStream(file, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+            {
+                Exception blocked = null;
+                try { store.Append(new DateTime(2026, 11, 19, 10, 10, 0), 11 * G, "82.50", null); }
+                catch (Exception ex) { blocked = ex; }
+                Equal(null, blocked, "locked usage file must not throw");
+            }
+        }
+        finally
+        {
+            try { Directory.Delete(directory, true); } catch { }
+        }
+    }
+
+    private static UsageSample Sample(DateTime time, double usedKb, params object[] packages)
+    {
+        UsageSample sample = new UsageSample { Timestamp = time, UsedKb = usedKb };
+        for (int i = 0; i < packages.Length; i += 2)
+            sample.Packages.Add(new UsagePackageSample
+            {
+                Name = (string)packages[i],
+                UsedKb = (double)packages[i + 1]
+            });
+        return sample;
+    }
+
+    private static void Near(double expected, double actual, string name)
+    {
+        if (Math.Abs(expected - actual) > 0.001)
+        {
+            Console.Error.WriteLine("FAIL " + name + ": expected " + expected + ", got " + actual);
+            _failed++;
         }
     }
 

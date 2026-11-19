@@ -46,6 +46,7 @@ namespace AdbDeviceVitals
         private readonly DispatcherTimer _publicIpDebounce;
         private readonly DispatcherTimer _broadnetTimer;
         private readonly BroadnetSessionService _broadnet = new BroadnetSessionService();
+        private readonly BroadnetUsageStore _usageStore = new BroadnetUsageStore();
 
         private WF.NotifyIcon _tray;
         private SmsWindow _smsWindow;
@@ -83,6 +84,10 @@ namespace AdbDeviceVitals
         private BroadnetTrafficWindow _broadnetTrafficWindow;
         private BroadnetTraffic _lastBroadnetTraffic;
         private DateTime _broadnetCheckedAt = DateTime.MinValue;
+        // 用量采样节流：静默刷新每 10 分钟一次，人工点刷新可能更密。
+        // 同一分钟内不重复落盘，避免短时间内的重复读数污染差分（差分为 0 无副作用，但文件会膨胀）。
+        private DateTime _lastUsageAppendedAt = DateTime.MinValue;
+        private double _lastUsageAppendedKb = -1;
         private DeviceSnapshot _lastSnapshot;
 
         public MainWindow()
@@ -617,8 +622,65 @@ namespace AdbDeviceVitals
                 "话费 " + (string.IsNullOrEmpty(traffic.Balance) ? "—" : traffic.Balance + " 元"));
             BroadnetUsedValue.Text = string.IsNullOrEmpty(traffic.MonthlyUsed)
                 ? string.Empty : "本月已用 " + traffic.MonthlyUsed;
+            RecordUsageSample(traffic);
             if (_broadnetTrafficWindow != null && _broadnetTrafficWindow.IsVisible)
-                _broadnetTrafficWindow.Apply(traffic);
+                ApplyTrafficWindow(traffic);
+        }
+
+        /// <summary>
+        /// 把一次成功读数落进用量时间序列。人工查询与 10 分钟静默刷新都经过 ApplyBroadnetTraffic，
+        /// 因此这一个入口覆盖所有采样；同一分钟 + 同一累计值的重复读数跳过。
+        /// </summary>
+        private void RecordUsageSample(BroadnetTraffic traffic)
+        {
+            try
+            {
+                // 坏读数不落盘：站点风控/页面改版时会拿到「已登录但 0 个包」的结果，
+                // 累计值是 0。若把它当采样写进去，站点恢复后 133G 的跳变会被差分
+                // 全算成那 10 分钟的用量，统计直接报废。
+                if (traffic.Packages.Count == 0 || traffic.MonthlyUsedKb <= 0)
+                {
+                    _broadnet.Trace("RecordUsageSample skipped: no valid packages / zero used");
+                    return;
+                }
+                DateTime now = DateTime.Now;
+                if (now - _lastUsageAppendedAt < TimeSpan.FromMinutes(1)
+                    && Math.Abs(traffic.MonthlyUsedKb - _lastUsageAppendedKb) < 0.01) return;
+                List<KeyValuePair<string, double>> packages = new List<KeyValuePair<string, double>>();
+                foreach (BroadnetPackage pkg in traffic.Packages)
+                {
+                    string name = pkg.Name ?? string.Empty;
+                    if (name.Length == 0) continue;
+                    packages.Add(new KeyValuePair<string, double>(name, pkg.UsedKb));
+                }
+                _usageStore.Append(now, traffic.MonthlyUsedKb, traffic.Balance ?? string.Empty, packages);
+                _lastUsageAppendedAt = now;
+                _lastUsageAppendedKb = traffic.MonthlyUsedKb;
+            }
+            catch (Exception ex)
+            {
+                _broadnet.Trace("RecordUsageSample THREW: " + ex.Message);
+            }
+        }
+
+        /// <summary>打开或刷新详情窗时，把当前余量与当月用量统计一起填进去。</summary>
+        private void ApplyTrafficWindow(BroadnetTraffic traffic)
+        {
+            if (_broadnetTrafficWindow == null) return;
+            _broadnetTrafficWindow.Apply(traffic, BuildUsageStats());
+        }
+
+        private UsageStats BuildUsageStats()
+        {
+            try
+            {
+                DateTime now = DateTime.Now;
+                return BroadnetUsageStore.Analyze(_usageStore.ReadCurrentMonth(now), now);
+            }
+            catch
+            {
+                return new UsageStats();
+            }
         }
 
         /// <summary>卡片主读数：只累计还能用的包，按 G 求和；显示成一行的「xx G」。</summary>
@@ -794,7 +856,7 @@ namespace AdbDeviceVitals
             if (IsVisible) _broadnetTrafficWindow.Owner = this;
             _broadnetTrafficWindow.Closed += delegate { _broadnetTrafficWindow = null; };
             _broadnetTrafficWindow.Show();
-            if (_lastBroadnetTraffic != null) _broadnetTrafficWindow.Apply(_lastBroadnetTraffic);
+            if (_lastBroadnetTraffic != null) ApplyTrafficWindow(_lastBroadnetTraffic);
         }
 
         private void BatteryInfo_Click(object sender, MouseButtonEventArgs e)

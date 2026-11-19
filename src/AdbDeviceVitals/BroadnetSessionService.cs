@@ -579,10 +579,14 @@ namespace AdbDeviceVitals
                             Total = G(high),
                             Remain = G(bal),
                             Used = G(used),
-                            Unit = "G"
+                            Unit = "G",
+                            // 原始 KB 数值：只用于用量统计差分，不展示。G() 会四舍五入到
+                            // 0.01 G（≈10 MB），10 分钟内的小额用量会被抹平。
+                            TotalKb = high, RemainKb = bal, UsedKb = used
                         });
                     }
                     result.MonthlyUsed = G(totalUsed);
+                    result.MonthlyUsedKb = totalUsed;
                 }
             }
             catch
@@ -839,6 +843,7 @@ namespace AdbDeviceVitals
                     if (root.TryGetProperty("balance", out value)) result.Balance = value.GetString() ?? string.Empty;
                     if (root.TryGetProperty("spend", out value)) result.MonthlySpend = value.GetString() ?? string.Empty;
                     double totalUsed = 0;
+                    double totalUsedKb = 0;
                     JsonElement packages;
                     if (root.TryGetProperty("packages", out value) && value.ValueKind == JsonValueKind.Array)
                     {
@@ -851,14 +856,30 @@ namespace AdbDeviceVitals
                             if (item.TryGetProperty("total", out packages)) pkg.Total = packages.GetString() ?? string.Empty;
                             if (item.TryGetProperty("unit", out packages)) pkg.Unit = packages.GetString() ?? string.Empty;
                             double used;
+                            // DOM 文本是 G/M 数值（如 "103.7"），换算回 KB 供统计差分。
+                            double factor = string.Equals(pkg.Unit, "M", StringComparison.OrdinalIgnoreCase)
+                                ? 1024.0 : 1048576.0;
+                            double usedKb = 0;
                             if (double.TryParse(NumText(pkg.Used), NumberStyles.Float, CultureInfo.InvariantCulture, out used)
-                                && used > 0) totalUsed += used;
+                                && used > 0)
+                            {
+                                totalUsed += used;
+                                usedKb = used * factor;
+                                totalUsedKb += usedKb;
+                            }
+                            double parsed;
+                            pkg.UsedKb = usedKb;
+                            pkg.RemainKb = double.TryParse(NumText(pkg.Remain), NumberStyles.Float,
+                                CultureInfo.InvariantCulture, out parsed) ? parsed * factor : 0;
+                            pkg.TotalKb = double.TryParse(NumText(pkg.Total), NumberStyles.Float,
+                                CultureInfo.InvariantCulture, out parsed) ? parsed * factor : 0;
                             result.Packages.Add(pkg);
                         }
                     }
                     result.MonthlyUsed = totalUsed > 0
                         ? totalUsed.ToString("0.##", CultureInfo.InvariantCulture) + " G"
                         : string.Empty;
+                    result.MonthlyUsedKb = totalUsedKb;
                 }
                 return result;
             }
@@ -908,6 +929,7 @@ namespace AdbDeviceVitals
         internal string Balance = string.Empty;       // 话费余额，元
         internal string MonthlySpend = string.Empty;  // 当月消费，元
         internal string MonthlyUsed = string.Empty;   // 本月已用流量，形如 "120.19 G"（各包 addupValue 之和）
+        internal double MonthlyUsedKb;                // 本月已用原始 KB（未四舍五入），供用量统计差分
         internal System.Collections.Generic.List<BroadnetPackage> Packages =
             new System.Collections.Generic.List<BroadnetPackage>();
     }
@@ -919,5 +941,9 @@ namespace AdbDeviceVitals
         internal string Remain = string.Empty;
         internal string Total = string.Empty;
         internal string Unit = string.Empty;
+        // 原始 KB 数值（未格式化），只用于用量统计的按包差分。
+        internal double UsedKb;
+        internal double RemainKb;
+        internal double TotalKb;
     }
 }
