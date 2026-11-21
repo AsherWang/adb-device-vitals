@@ -230,6 +230,10 @@ namespace AdbDeviceVitals
             {
                 DeviceHintText.Foreground = Warning;
                 DeviceHintText.Text = "记录的设备当前不在线。请从上面的列表重新选择一台已连接的设备，或选择「自动选择」，然后再保存。";
+                string active = DeviceSelection.ActiveSerial;
+                if (active.Length > 0)
+                    DeviceHintText.Text += " 程序已临时切换到 " + DeviceSelection.ShortSerial(active)
+                        + "，预设设备回来后会自动切回；这里保存会把当前选择固定为预设。";
                 return;
             }
             if (!string.IsNullOrEmpty(error))

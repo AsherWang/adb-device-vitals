@@ -199,12 +199,13 @@ namespace AdbDeviceVitals.Services
             set { Update(delegate(SettingsData data) { data.CarrierByDevice = (value ?? string.Empty).Trim(); }, false, true); }
         }
 
-        /// <summary>当前目标设备指定的运营商；没有映射或自动模式时返回 None。</summary>
+        /// <summary>当前生效设备指定的运营商；没有映射或自动模式时返回 None。
+        /// 故障转移期间按临时接管的设备取，不能沿用掉线那台的运营商。</summary>
         public static TrafficCarrier CurrentCarrier
         {
             get
             {
-                string serial = TargetDeviceSerial;
+                string serial = DeviceSelection.EffectiveSerial;
                 if (serial.Length == 0) return TrafficCarrier.None;
                 lock (Gate) { return CarrierMapping.Get(_current.CarrierByDevice, serial); }
             }

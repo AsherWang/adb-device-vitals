@@ -10,8 +10,12 @@ namespace AdbDeviceVitals.Services
     /// </summary>
     public sealed class DeviceSelection
     {
+        private static readonly object ActiveGate = new object();
+        private static string _activeSerial = string.Empty;
+
         private DeviceSelection(AdbDevice device, string message, bool needsSelection, bool preferredMissing,
-            string preferredSerial, int authorizedCount, int unauthorizedCount)
+            string preferredSerial, int authorizedCount, int unauthorizedCount,
+            string previousSerial = "", bool justSwitched = false, bool switchBack = false)
         {
             Device = device;
             Message = message ?? string.Empty;
@@ -20,6 +24,9 @@ namespace AdbDeviceVitals.Services
             PreferredSerial = preferredSerial ?? string.Empty;
             AuthorizedCount = authorizedCount;
             UnauthorizedCount = unauthorizedCount;
+            PreviousSerial = previousSerial ?? string.Empty;
+            JustSwitched = justSwitched;
+            SwitchBack = switchBack;
         }
 
         /// <summary>选中的设备；需要用户先做选择或没有可用设备时为 null。</summary>
@@ -38,20 +45,49 @@ namespace AdbDeviceVitals.Services
         public int AuthorizedCount { get; private set; }
         public int UnauthorizedCount { get; private set; }
 
+        /// <summary>本次从哪台设备切过来（短序列号由界面自行格式化）。</summary>
+        public string PreviousSerial { get; private set; }
+
+        /// <summary>本轮刚因预设设备掉线而切到备用机；只在切换当轮为真，避免重复提示。</summary>
+        public bool JustSwitched { get; private set; }
+
+        /// <summary>本轮预设设备重新上线，已从备用机切回。</summary>
+        public bool SwitchBack { get; private set; }
+
+        /// <summary>
+        /// 运行时实际生效的设备序列号。故障转移期间它与配置里的预设设备不同；
+        /// 预设设备回来后自动恢复。设置页保存会显式重置，让新配置立刻生效。
+        /// </summary>
+        public static string ActiveSerial
+        {
+            get { lock (ActiveGate) { return _activeSerial; } }
+        }
+
+        public static string EffectiveSerial
+        {
+            get
+            {
+                string active = ActiveSerial;
+                return active.Length > 0 ? active : AppSettings.TargetDeviceSerial;
+            }
+        }
+
+        public static void SetActiveSerial(string serial)
+        {
+            string value = IsValidSerial(serial) ? serial.Trim() : string.Empty;
+            lock (ActiveGate) { _activeSerial = value; }
+        }
+
+        public static void ResetActiveSerial()
+        {
+            lock (ActiveGate) { _activeSerial = string.Empty; }
+        }
+
         public static DeviceSelection Resolve(IList<AdbDevice> devices, string preferredSerial)
         {
             string preferred = (preferredSerial ?? string.Empty).Trim();
-            List<AdbDevice> authorized = new List<AdbDevice>();
-            int unauthorized = 0;
-            if (devices != null)
-            {
-                foreach (AdbDevice device in devices)
-                {
-                    if (device == null) continue;
-                    if (IsAuthorized(device)) authorized.Add(device);
-                    else unauthorized++;
-                }
-            }
+            List<AdbDevice> authorized = Authorized(devices);
+            int unauthorized = CountUnauthorized(devices);
 
             if (authorized.Count == 0)
             {
@@ -84,6 +120,85 @@ namespace AdbDeviceVitals.Services
                 + " 台 Android 设备，请在设置中指定用于网络共享的设备。";
             return new DeviceSelection(null, ambiguous, true, false, preferred,
                 authorized.Count, unauthorized);
+        }
+
+        /// <summary>
+        /// 带故障转移的解析：预设设备掉线时，若只剩一台已授权手机（或此前已经切到
+        /// 某台备用机且它仍在线），就临时由它接管；预设设备回来后立刻切回。
+        /// 多台备用机时仍然要求用户去设置里选，绝不随机挑一台。
+        /// </summary>
+        public static DeviceSelection ResolveWithFailover(IList<AdbDevice> devices, string preferredSerial,
+            string activeSerial)
+        {
+            string preferred = (preferredSerial ?? string.Empty).Trim();
+            string active = IsValidSerial(activeSerial) ? activeSerial.Trim() : string.Empty;
+            DeviceSelection strict = Resolve(devices, preferred);
+
+            if (preferred.Length == 0 || strict.Device != null)
+            {
+                if (strict.Device == null || active.Length == 0 || Same(active, preferred)) return strict;
+                return new DeviceSelection(strict.Device, string.Empty, false, false, preferred,
+                    strict.AuthorizedCount, strict.UnauthorizedCount, active, false, true);
+            }
+
+            // 预设设备不在线：先看之前接管的那台是否还在，避免插上第三台时被挤掉。
+            if (active.Length > 0)
+            {
+                AdbDevice current = Find(devices, active);
+                if (current != null)
+                {
+                    return new DeviceSelection(current, string.Empty, false, true, preferred,
+                        strict.AuthorizedCount, strict.UnauthorizedCount);
+                }
+            }
+
+            // 首次掉线且只有一台候选：切过去，并记下来源用于提示。
+            if (strict.AuthorizedCount == 1)
+            {
+                AdbDevice only = Find(devices, null);
+                return new DeviceSelection(only, string.Empty, false, true, preferred, 1,
+                    strict.UnauthorizedCount, active.Length > 0 ? active : preferred, true, false);
+            }
+
+            return strict;
+        }
+
+        private static AdbDevice Find(IList<AdbDevice> devices, string serial)
+        {
+            if (devices == null) return null;
+            foreach (AdbDevice device in devices)
+            {
+                if (!IsAuthorized(device)) continue;
+                if (serial == null || Same(device.Serial, serial)) return device;
+            }
+            return null;
+        }
+
+        private static List<AdbDevice> Authorized(IList<AdbDevice> devices)
+        {
+            List<AdbDevice> result = new List<AdbDevice>();
+            if (devices == null) return result;
+            foreach (AdbDevice device in devices)
+            {
+                if (IsAuthorized(device)) result.Add(device);
+            }
+            return result;
+        }
+
+        private static int CountUnauthorized(IList<AdbDevice> devices)
+        {
+            int count = 0;
+            if (devices == null) return count;
+            foreach (AdbDevice device in devices)
+            {
+                if (device != null && !IsAuthorized(device)) count++;
+            }
+            return count;
+        }
+
+        private static bool Same(string left, string right)
+        {
+            return string.Equals(left ?? string.Empty, right ?? string.Empty, StringComparison.OrdinalIgnoreCase);
         }
 
         public static bool IsAuthorized(AdbDevice device)

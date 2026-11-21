@@ -212,9 +212,8 @@ namespace AdbDeviceVitals
                     if (check.Logged && !check.OnLoginPage) _apiWarmed = true;
                     if (!check.Logged || check.OnLoginPage)
                     {
-                        // 会话过期：删掉失效快照，窗口保持打开让用户重新登录，
-                        // 否则下次启动还会注入同一个坏会话，陷入「秒关但没登录」。
-                        TryDeleteSnapshot();
+                        // 不删快照：设备拔线/未选设备时也会走到这里，删了就得重新登录。
+                        // 保留文件只影响下一次自动恢复，人工重新登录成功时会直接覆盖它。
                         SetStatus("上次登录已过期，请在窗口中重新登录 10099");
                     }
                     // 恢复成功时什么都不用做：下面的 _pollTimer 下一次 tick 会在个人中心页
@@ -274,7 +273,7 @@ namespace AdbDeviceVitals
         /// <summary>
         /// 后台静默刷新：只在已有登录快照 / 已登录时工作，全程不弹窗。
         /// 用带时间戳的 URL 强制重新导航个人中心，让站点重发业务接口以拿到最新余量。
-        /// 会话过期则删快照、清登录态，由调用方把卡片退回「点击查询」。
+        /// 会话过期只清内存标记、保留快照供后续周期重试，由调用方把卡片退回「点击查询」。
         /// 与人工登录共用 _trafficGate 串行化，避免并发导航搞崩 WebView2。
         /// </summary>
         public async Task<BroadnetTraffic> RefreshTrafficSilentlyAsync()
@@ -378,14 +377,13 @@ namespace AdbDeviceVitals
             }
         }
 
-        /// <summary>静默刷新判定会话失效：删快照、清标记，让下次点击走人工登录。</summary>
+        /// <summary>静默刷新判定会话失效：清内存标记，但保留快照文件供后续周期重试。</summary>
         private void MarkExpired(string reason)
         {
             LastAttemptExpired = true;
-            TryDeleteSnapshot();
             lock (_gate) { _loggedIn = false; _phone = string.Empty; }
             SetStatus(reason + "，请点击余量卡片重新登录");
-            WriteTrace("silent: " + reason + ", snapshot deleted");
+            WriteTrace("silent: " + reason + ", snapshot kept for retry");
         }
 
         /// <summary>外部（托盘入口）也可记一笔，用于确认菜单点击是否真的进了流程。</summary>
@@ -749,22 +747,6 @@ namespace AdbDeviceVitals
             catch
             {
                 return false;
-            }
-        }
-
-        /// <summary>删除失效的登录快照，避免下次启动又注入同一个坏会话。</summary>
-        private void TryDeleteSnapshot()
-        {
-            try
-            {
-                if (!string.IsNullOrEmpty(_snapshotPath) && File.Exists(_snapshotPath))
-                {
-                    File.Delete(_snapshotPath);
-                    WriteTrace("deleted stale snapshot");
-                }
-            }
-            catch
-            {
             }
         }
 

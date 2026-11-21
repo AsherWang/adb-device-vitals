@@ -70,6 +70,8 @@ namespace AdbDeviceVitals
         private bool _shutdownDone;
         private bool _polling;
         private bool _allowExit;
+        private bool _deviceConnected;
+        private bool _hasPolled;
         private bool _offlineNotified;
         private bool _needsDeviceChoice;
         private bool _usbTetherRunning;
@@ -124,9 +126,9 @@ namespace AdbDeviceVitals
             _publicIpTimer.Tick += delegate { _ = RefreshPublicIpAsync(); };
             _publicIpDebounce = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
             _publicIpDebounce.Tick += delegate { _publicIpDebounce.Stop(); _ = RefreshPublicIpAsync(); };
-            // 广电余量：每 10 分钟静默刷新一次（有登录态才工作），与人工点击共用服务层闸门。
+            // 两家运营商都要定时续期：只跟着"当前选中的那一家"刷，会导致另一家登录态过期。
             _broadnetTimer = new DispatcherTimer { Interval = TimeSpan.FromMinutes(10) };
-            _broadnetTimer.Tick += delegate { _ = RefreshBroadnetSilentAsync(); };
+            _broadnetTimer.Tick += delegate { _ = RefreshAllTrafficSilentlyAsync(); };
             _networkChangedHandler = delegate
             {
                 Dispatcher.InvokeAsync(delegate
@@ -208,8 +210,9 @@ namespace AdbDeviceVitals
         private async void StartInitialWork()
         {
             await RefreshSnapshot(true);
-            // 此时 RefreshSnapshot 已完成 SIM 识别并选定服务，静默刷新不会再串到上一家。
-            if (_broadnetAutoEnabled) _ = RefreshBroadnetSilentAsync();
+            // 此时 RefreshSnapshot 已完成 SIM 识别并选定服务；两家会话都刷一次，
+            // 不依赖当前选中的运营商，也不因设备未连接而跳过。
+            if (_broadnetAutoEnabled) _ = RefreshAllTrafficSilentlyAsync();
             _pcHotspotChainPending = true;
             StartUsbTethering();
             RefreshPcHotspotStatus(true);
@@ -316,13 +319,32 @@ namespace AdbDeviceVitals
         }
 
         /// <summary>
+        /// 预设设备掉线后备用机接管、或预设设备回来后切回：提示一次，并让 USB 共享在
+        /// 新设备上重新走一遍 Ensure。配置里的预设设备不动，所以原机回来能自动恢复。
+        /// </summary>
+        private void HandleDeviceSwitch(DeviceSnapshot snapshot)
+        {
+            if (!snapshot.AutoSwitchedToFallback && !snapshot.SwitchedBackToPreferred) return;
+            string from = string.IsNullOrEmpty(snapshot.SwitchFromSerial)
+                ? "原设备" : DeviceSelection.ShortSerial(snapshot.SwitchFromSerial);
+            string to = DeviceSelection.ShortSerial(snapshot.DeviceSerial);
+            _trafficService.Trace("device switch " + from + " -> " + to
+                + (snapshot.SwitchedBackToPreferred ? " (back to preferred)" : " (failover)"));
+            Notify(snapshot.SwitchedBackToPreferred ? "已切回预设设备" : "已自动切换设备",
+                from + " → " + to + (AppSettings.AutoEnableUsbTethering
+                    ? "，正在重新开启 USB 网络共享。" : "。"),
+                WF.ToolTipIcon.Info);
+            StartUsbTethering();
+        }
+
+        /// <summary>
         /// 目标设备变了才读一次 SIM 识别运营商，避免每轮轮询都开 adb 进程。
         /// 已有手动映射时跳过（手动优先），识别不到保持 None（卡片提示去设置）。
         /// </summary>
         private async Task EnsureAutoCarrierAsync()
         {
             if (AppSettings.CurrentCarrier != TrafficCarrier.None) return;
-            string serial = AppSettings.TargetDeviceSerial;
+            string serial = DeviceSelection.EffectiveSerial;
             if (serial.Length == 0) return;
             if (string.Equals(serial, _autoDetectedSerial, StringComparison.OrdinalIgnoreCase)) return;
 
@@ -337,18 +359,25 @@ namespace AdbDeviceVitals
             _polling = true;
             try
             {
+                bool wasConnected = _deviceConnected;
                 DeviceSnapshot snapshot = await _monitor.PollAsync(force);
+                HandleDeviceSwitch(snapshot);
                 // 运营商跟着目标设备走：手动映射优先；没配时按设备 SIM 的 PLMN 自动识别。
                 await EnsureAutoCarrierAsync();
                 // 设备变了也要重建上下文：两台同运营商的手机不能沿用上一台读数。
                 TrafficCarrier effective = EffectiveCarrier();
-                string serial = AppSettings.TargetDeviceSerial;
+                string serial = DeviceSelection.EffectiveSerial;
                 if (effective != _currentCarrier ||
                     !string.Equals(serial, _trafficDeviceSerial, StringComparison.OrdinalIgnoreCase))
                 {
                     SelectTrafficService();
                 }
                 UpdateUi(snapshot);
+                // 设备从无到有时立刻补一次：拔线期间只在后台续期、不更新卡片，
+                // 回来后不用等下一个 10 分钟周期就能把余量显示出来。
+                if (_hasPolled && snapshot.Connected && !wasConnected && _broadnetAutoEnabled)
+                    _ = RefreshAllTrafficSilentlyAsync();
+                _hasPolled = true;
                 if (snapshot.Connected && DateTime.Now - _lastLog >= TimeSpan.FromSeconds(10))
                 {
                     _logger.Append(snapshot);
@@ -373,10 +402,12 @@ namespace AdbDeviceVitals
         {
             _lastSnapshot = s;
             _needsDeviceChoice = s.NeedsDeviceSelection;
+            _deviceConnected = s.Connected;
             ConnectionStatus.Cursor = _needsDeviceChoice ? Cursors.Hand : Cursors.Arrow;
             ApplySignalSource(s);
             if (!s.Connected)
             {
+                ApplyBroadnetDisconnected();
                 ConnectionStatus.Text = s.NeedsDeviceSelection
                     ? (s.PreferredSerialMissing ? "预设设备未连接 · 点此重新选择" : "检测到多台设备 · 点此指定")
                     : s.Error;
@@ -563,7 +594,7 @@ namespace AdbDeviceVitals
             _currentCarrier = carrier;
             _trafficService = carrier == TrafficCarrier.Telecom
                 ? (ICarrierTrafficService)_telecom : _broadnet;
-            _trafficDeviceSerial = AppSettings.TargetDeviceSerial;
+            _trafficDeviceSerial = DeviceSelection.EffectiveSerial;
             _usageStore = new BroadnetUsageStore(carrier);
             _lastBroadnetTraffic = null;
             _lastUsageAppendedAt = DateTime.MinValue;
@@ -594,7 +625,7 @@ namespace AdbDeviceVitals
             return !_shutdownDone
                 && ReferenceEquals(service, _trafficService)
                 && carrier == _currentCarrier
-                && string.Equals(serial, AppSettings.TargetDeviceSerial, StringComparison.OrdinalIgnoreCase);
+                && string.Equals(serial, DeviceSelection.EffectiveSerial, StringComparison.OrdinalIgnoreCase);
         }
 
         /// <summary>
@@ -656,7 +687,7 @@ namespace AdbDeviceVitals
             // 捕获发起时的上下文；WebView 人工登录可能持续很久，期间用户可能改设备/运营商。
             ICarrierTrafficService service = _trafficService;
             TrafficCarrier carrier = _currentCarrier;
-            string serial = AppSettings.TargetDeviceSerial;
+            string serial = DeviceSelection.EffectiveSerial;
             BroadnetTraffic traffic = await service.EnsureAndReadTrafficAsync();
             if (!IsTrafficContextCurrent(service, carrier, serial))
             {
@@ -685,21 +716,36 @@ namespace AdbDeviceVitals
         }
 
         /// <summary>
-        /// 后台静默刷新（启动一次 + 每 10 分钟）：有登录态就自己取，不打扰用户；
-        /// 会话过期则把卡片退回「点击查询」，其余失败保留上次读数，不误清成过期态。
+        /// 每 10 分钟给广电和电信各做一次静默续期：与"当前选中哪台设备/哪家运营商"无关，
+        /// 没选设备或设备拔线时照样跑，否则另一家的登录态会悄悄过期。两家服务各自有闸门，
+        /// 这里串行调用，避免同时起两个离屏 WebView 抢资源。
         /// </summary>
-        private async Task RefreshBroadnetSilentAsync()
+        private async Task RefreshAllTrafficSilentlyAsync()
         {
             if (_shutdownDone) return;
-            ICarrierTrafficService service = _trafficService;
+            await RefreshOneTrafficSilentlyAsync(_broadnet);
+            await RefreshOneTrafficSilentlyAsync(_telecom);
+        }
+
+        private async Task RefreshOneTrafficSilentlyAsync(ICarrierTrafficService service)
+        {
+            ICarrierTrafficService selected = _trafficService;
             TrafficCarrier carrier = _currentCarrier;
-            string serial = AppSettings.TargetDeviceSerial;
+            string serial = DeviceSelection.EffectiveSerial;
             try
             {
                 BroadnetTraffic traffic = await service.RefreshTrafficSilentlyAsync();
-                if (!IsTrafficContextCurrent(service, carrier, serial))
+                // 非当前运营商：刷新只为续期，绝不把别家读数写进卡片。
+                if (!ReferenceEquals(service, selected) ||
+                    !IsTrafficContextCurrent(service, carrier, serial))
                 {
-                    service.Trace("silent: discard stale result after device/carrier switch");
+                    service.Trace("silent keep-alive: session refreshed, not current carrier/device");
+                    return;
+                }
+                // 拔线 / 未选设备期间只在后台续期，卡片维持"未连接"，等设备回来再补数据。
+                if (!_deviceConnected)
+                {
+                    service.Trace("silent keep-alive: device offline, card stays disconnected");
                     return;
                 }
                 if (traffic != null && traffic.Packages.Count > 0)
@@ -708,7 +754,6 @@ namespace AdbDeviceVitals
                 }
                 else if (traffic != null && traffic.Packages.Count == 0)
                 {
-                    // 风控/改版导致的 0 包：保留上次有效读数，不误清卡片，等下个周期。
                     service.Trace("silent: no packages resolved, keep last card value");
                 }
                 else if (service.LastAttemptExpired)
@@ -716,12 +761,21 @@ namespace AdbDeviceVitals
                     ApplyBroadnetPrompt();
                     service.Trace("silent refresh -> expired, card reset to prompt");
                 }
-                // 其它失败（网络抖动 / 超时）：保留卡片上的上次读数，等下一个周期。
+                // 其它失败保留上次读数，等下一个周期。
             }
             catch (Exception ex)
             {
-                service.Trace("RefreshBroadnetSilentAsync THREW: " + ex);
+                service.Trace("RefreshOneTrafficSilentlyAsync THREW: " + ex);
             }
+        }
+
+        /// <summary>设备未连接/未选设备时的卡片状态：只标未连接，登录快照继续在后台续期。</summary>
+        private void ApplyBroadnetDisconnected()
+        {
+            UpdateBroadnetCarrierLabel();
+            ApplyBroadnetCard("未连接", "设备未连接 · 后台继续续期登录态");
+            BroadnetUsedValue.Text = string.Empty;
+            _lastBroadnetTraffic = null;
         }
 
         /// <summary>登录态不可用时卡片回到初始提示，引导用户点击走人工登录。</summary>
@@ -800,7 +854,7 @@ namespace AdbDeviceVitals
             if (_broadnetTrafficWindow == null) return;
             // 详情窗是在某个设备/运营商下打开的；上下文变了就不往旧窗里填新数据。
             if (_trafficWindowCarrier != _currentCarrier ||
-                !string.Equals(_trafficWindowSerial, AppSettings.TargetDeviceSerial, StringComparison.OrdinalIgnoreCase))
+                !string.Equals(_trafficWindowSerial, DeviceSelection.EffectiveSerial, StringComparison.OrdinalIgnoreCase))
                 return;
             _broadnetTrafficWindow.Apply(traffic, BuildUsageStats());
         }
@@ -995,7 +1049,7 @@ namespace AdbDeviceVitals
             }
             _broadnetTrafficWindow = new BroadnetTrafficWindow(
                 delegate { _ = OpenBroadnetSafe(); });
-            _trafficWindowSerial = AppSettings.TargetDeviceSerial;
+            _trafficWindowSerial = DeviceSelection.EffectiveSerial;
             _trafficWindowCarrier = _currentCarrier;
             _broadnetTrafficWindow.SetCarrier(CarrierDisplayName());
             if (IsVisible) _broadnetTrafficWindow.Owner = this;
@@ -1427,6 +1481,7 @@ namespace AdbDeviceVitals
             if (smsBefore && !AppSettings.SmsSyncEnabled) _smsErrorNotified = false;
             RefreshSmsPreview();
             _adb.ReloadPath();
+            DeviceSelection.ResetActiveSerial(); // 设置里刚保存了新预设，清掉临时故障转移目标
             _carrierDetector.Invalidate(null); // 设置里可能换了设备/运营商，下轮重新识别
             _autoDetectedSerial = string.Empty;
             StartUsbTethering();

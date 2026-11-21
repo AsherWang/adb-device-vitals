@@ -28,17 +28,28 @@ namespace AdbDeviceVitals
         private const string DefaultPathPrefix = "telecom";
         private string _pathPrefix = DefaultPathPrefix;
 
-        // 登录判据：主页渲染出账户区（"退出登录" + "账户余额"）即已登录。
+        // 登录判据：主页渲染出账户区且带「退出登录」才算已登录。
+        // 注意：账户余额/已用流量那一块未登录时也渲染（数值为 --），不能拿它判登录态。
         // 电信的登录态在 cookie / localStorage，没有广电那种 sessionStorage id。
         private const string DetectScript = @"(function(){
   var b = document.body ? (document.body.innerText||'') : '';
   var url = location.href;
-  var logged = b.indexOf('退出登录')>=0 && /账户余额|余额/.test(b);
+  var hasLogout = b.indexOf('退出登录')>=0;
+  var hasBalance = /账户余额|余额/.test(b);
+  var logged = hasLogout && hasBalance;
   var phone = (b.match(/1\d{2}\*{2,4}\d{3,4}/)||[])[0] || '';
-  // 明确落在登录/认证页才算「可判定未登录」；首页账户区尚未渲染完时不算。
-  var onLoginPage = /login|passport|signin|sso/i.test(url) ||
-      (b.indexOf('退出登录')<0 && /短信登录|密码登录|验证码登录|立即登录/.test(b)) ? 1 : 0;
-  return JSON.stringify({logged: logged?1:0, phone: phone, url: url, onLoginPage: onLoginPage});
+  // 未登录首页特征：右上角「登录」按钮 + 欢迎语，且没有「退出登录」。
+  var anonymousHome = !hasLogout && (b.indexOf('欢迎你')>=0 ||
+      /请登录|立即登录|短信登录|密码登录|登录注册/.test(b));
+  // 明确未登录才算可判定过期；首页账户区尚未渲染完时不算，避免误判。
+  var onLoginPage = /login|passport|signin|sso/i.test(url) || anonymousHome ? 1 : 0;
+  // 诊断提示：区分风控 / 已登录 / 未登录首页 / 加载中 / 其它。
+  var pageKind = /验证码|安全验证|滑动|滑块|行为验证|访问受限|操作频繁|拒绝访问/.test(b) ? 'risk-control'
+    : logged ? 'logged-in'
+    : anonymousHome ? 'anonymous-home'
+    : b.length < 40 ? 'blank-or-loading'
+    : 'unknown';
+  return JSON.stringify({logged: logged?1:0, phone: phone, url: url, onLoginPage: onLoginPage, pageKind: pageKind});
 })()";
 
         private const string DumpScript = @"(function(){
@@ -162,7 +173,9 @@ namespace AdbDeviceVitals
                     Detection check = ParseDetection(await _window.EvaluateAsync(DetectScript));
                     bool logged = apiOk || check.Logged;
                     WriteTrace("restored check logged=" + (check.Logged ? "1" : "0")
-                        + " api=" + (apiOk ? "1" : "0") + " onLoginPage=" + (check.OnLoginPage ? "1" : "0"));
+                        + " api=" + (apiOk ? "1" : "0") + " onLoginPage=" + (check.OnLoginPage ? "1" : "0")
+                        + " page=" + (string.IsNullOrEmpty(check.PageKind) ? "?" : check.PageKind)
+                        + " url=" + TraceUrl(check.Url));
                     if (logged)
                     {
                         lock (_gate) { _loggedIn = true; _phone = check.Phone; }
@@ -174,7 +187,7 @@ namespace AdbDeviceVitals
                     // 只有明确落在登录页才认定过期；否则是页面未就绪，保留快照让用户继续。
                     if (check.OnLoginPage)
                     {
-                        TryDeleteSnapshot();
+                        // 不主动删快照：拔线/未选设备时也可能判到过期，删了就要重新登录。
                         SetStatus("上次登录已过期，请在窗口中重新登录 189.cn");
                     }
                     else
@@ -275,6 +288,8 @@ namespace AdbDeviceVitals
                 bool logged = apiOk || check.Logged;
                 WriteTrace("silent: check logged=" + (check.Logged ? "1" : "0")
                     + " api=" + (apiOk ? "1" : "0") + " onLoginPage=" + (check.OnLoginPage ? "1" : "0")
+                    + " page=" + (string.IsNullOrEmpty(check.PageKind) ? "?" : check.PageKind)
+                    + " url=" + TraceUrl(check.Url)
                     + " navigated=" + (navigated ? "1" : "0"));
                 if (!logged)
                 {
@@ -320,10 +335,9 @@ namespace AdbDeviceVitals
         private void MarkExpired(string reason)
         {
             LastAttemptExpired = true;
-            TryDeleteSnapshot();
             lock (_gate) { _loggedIn = false; _phone = string.Empty; }
             SetStatus(reason + "，请点击余量卡片重新登录");
-            WriteTrace("silent: " + reason + ", snapshot deleted");
+            WriteTrace("silent: " + reason + ", snapshot kept for retry");
         }
 
         public void Trace(string message) { WriteTrace(message); }
@@ -337,7 +351,9 @@ namespace AdbDeviceVitals
                 if (detection.Logged != _lastLoggedForTrace || fromUserConfirm)
                 {
                     _lastLoggedForTrace = detection.Logged;
-                    WriteTrace("detect logged=" + (detection.Logged ? "1" : "0"));
+                    WriteTrace("detect logged=" + (detection.Logged ? "1" : "0")
+                        + " page=" + (string.IsNullOrEmpty(detection.PageKind) ? "?" : detection.PageKind)
+                        + " url=" + TraceUrl(detection.Url));
                 }
                 if (!detection.Logged)
                 {
@@ -500,6 +516,20 @@ namespace AdbDeviceVitals
             return raw;
         }
 
+        /// <summary>日志里只保留 host+path，去掉 ?_t= 时间戳 query，避免刷屏。</summary>
+        private static string TraceUrl(string url)
+        {
+            if (string.IsNullOrEmpty(url)) return "-";
+            try
+            {
+                Uri uri;
+                if (Uri.TryCreate(url, UriKind.Absolute, out uri))
+                    return uri.GetLeftPart(UriPartial.Path);
+            }
+            catch { }
+            return url.Length > 120 ? url.Substring(0, 120) : url;
+        }
+
         private static Detection ParseDetection(string raw)
         {
             Detection result = new Detection();
@@ -513,6 +543,8 @@ namespace AdbDeviceVitals
                     if (root.TryGetProperty("logged", out value)) result.Logged = value.GetInt32() != 0;
                     if (root.TryGetProperty("phone", out value)) result.Phone = value.GetString() ?? string.Empty;
                     if (root.TryGetProperty("onLoginPage", out value)) result.OnLoginPage = value.GetInt32() != 0;
+                    if (root.TryGetProperty("url", out value)) result.Url = value.GetString() ?? string.Empty;
+                    if (root.TryGetProperty("pageKind", out value)) result.PageKind = value.GetString() ?? string.Empty;
                 }
             }
             catch { }
@@ -524,6 +556,8 @@ namespace AdbDeviceVitals
             internal bool Logged;
             internal bool OnLoginPage;
             internal string Phone = string.Empty;
+            internal string Url = string.Empty;
+            internal string PageKind = string.Empty;
         }
 
         public void Shutdown()
@@ -553,19 +587,6 @@ namespace AdbDeviceVitals
                 return true;
             }
             catch { return false; }
-        }
-
-        private void TryDeleteSnapshot()
-        {
-            try
-            {
-                if (!string.IsNullOrEmpty(_snapshotPath) && File.Exists(_snapshotPath))
-                {
-                    File.Delete(_snapshotPath);
-                    WriteTrace("deleted stale snapshot");
-                }
-            }
-            catch { }
         }
 
         private async Task SaveSnapshotAsync()

@@ -137,7 +137,7 @@ namespace AdbDeviceVitals.Services
                 else
                 {
                     IList<AdbDevice> devices = await ListLoggedAsync(log).ConfigureAwait(false);
-                    DeviceSelection selection = DeviceSelection.Resolve(devices, AppSettings.TargetDeviceSerial);
+                    DeviceSelection selection = DeviceSelection.Resolve(devices, DeviceSelection.EffectiveSerial);
                     AdbDevice device = selection.Device;
                     if (device == null)
                     {
@@ -171,7 +171,7 @@ namespace AdbDeviceVitals.Services
         {
             if (!_adb.IsAvailable) return UsbTetherResult.Failed("找不到 adb.exe。");
             IList<AdbDevice> devices = await ListLoggedAsync(log).ConfigureAwait(false);
-            DeviceSelection selection = DeviceSelection.Resolve(devices, AppSettings.TargetDeviceSerial);
+            DeviceSelection selection = DeviceSelection.Resolve(devices, DeviceSelection.EffectiveSerial);
             AdbDevice device = selection.Device;
             if (device == null) return UsbTetherResult.Failed(selection.Message);
 

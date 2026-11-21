@@ -194,6 +194,33 @@ internal static class ParserTests
         DeviceSelection empty = DeviceSelection.Resolve(new List<AdbDevice>(), string.Empty);
         Equal("未找到已授权的 Android 设备。", empty.Message, "empty device list message");
 
+        // 故障转移：预设掉线、只剩一台已授权手机时临时接管，且不改配置里的预设。
+        DeviceSelection failover = DeviceSelection.ResolveWithFailover(
+            new List<AdbDevice> { tablet }, "M2102K1AC", string.Empty);
+        Equal("emulator-5554", failover.Device == null ? null : failover.Device.Serial, "failover picks sole device");
+        Equal(false, failover.NeedsSelection, "failover does not need a choice");
+        Equal(true, failover.JustSwitched, "failover reports the switch");
+        Equal("M2102K1AC", failover.PreviousSerial, "failover remembers source");
+
+        // 已切到备用机时不要因为又插了第三台而反复切换。
+        DeviceSelection stay = DeviceSelection.ResolveWithFailover(
+            new List<AdbDevice> { tablet, new AdbDevice("third-1234", "device", "Third") },
+            "M2102K1AC", "emulator-5554");
+        Equal("emulator-5554", stay.Device == null ? null : stay.Device.Serial, "active fallback stays");
+        Equal(false, stay.JustSwitched, "staying is not a new switch");
+
+        // 预设设备回来后立刻切回。
+        DeviceSelection back = DeviceSelection.ResolveWithFailover(
+            new List<AdbDevice> { phone, tablet }, "M2102K1AC", "emulator-5554");
+        Equal("M2102K1AC", back.Device == null ? null : back.Device.Serial, "preferred device takes back over");
+        Equal(true, back.SwitchBack, "switch back reported");
+
+        // 多台候选且没有既有接管目标：仍要求用户明确选择，不能随机挑一台。
+        DeviceSelection ambiguousFailover = DeviceSelection.ResolveWithFailover(
+            new List<AdbDevice> { phone, tablet }, "gone-1234", string.Empty);
+        Equal(null, ambiguousFailover.Device, "no blind failover with several candidates");
+        Equal(true, ambiguousFailover.NeedsSelection, "several candidates still need selection");
+
         Equal(true, DeviceSelection.IsAuthorized(phone), "device state authorized");
         Equal(false, DeviceSelection.IsAuthorized(pending), "unauthorized state rejected");
         Equal(true, DeviceSelection.IsValidSerial("emulator-5554"), "valid serial");

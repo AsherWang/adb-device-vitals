@@ -16,6 +16,15 @@ namespace AdbDeviceVitals.Models
         /// <summary>设置里记录的序列号已不在当前设备列表中。</summary>
         public bool PreferredSerialMissing { get; set; }
 
+        /// <summary>本轮因预设设备掉线而临时切到了备用机；只在切换当轮为真。</summary>
+        public bool AutoSwitchedToFallback { get; set; }
+
+        /// <summary>本轮预设设备重新上线，已从备用机切回。</summary>
+        public bool SwitchedBackToPreferred { get; set; }
+
+        /// <summary>切换来源序列号，空表示冷启动或无法追溯。</summary>
+        public string SwitchFromSerial { get; set; }
+
         public int? BatteryLevel { get; set; }
         public double? BatteryTemperatureC { get; set; }
         public double? BatteryVoltageV { get; set; }
@@ -61,6 +70,7 @@ namespace AdbDeviceVitals.Models
             Error = string.Empty;
             NeedsDeviceSelection = false;
             PreferredSerialMissing = false;
+            SwitchFromSerial = string.Empty;
             BatteryStatus = "未知";
             BatteryHealth = "未知";
             OperatorName = string.Empty;

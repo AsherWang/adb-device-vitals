@@ -39,6 +39,9 @@ namespace AdbDeviceVitals.Services
             snapshot.Error = string.Empty;
             snapshot.NeedsDeviceSelection = false;
             snapshot.PreferredSerialMissing = false;
+            snapshot.AutoSwitchedToFallback = false;
+            snapshot.SwitchedBackToPreferred = false;
+            snapshot.SwitchFromSerial = string.Empty;
 
             if (!_adb.IsAvailable)
             {
@@ -49,7 +52,12 @@ namespace AdbDeviceVitals.Services
             }
 
             IList<AdbDevice> devices = await _adb.ListDevicesAsync().ConfigureAwait(false);
-            DeviceSelection selection = DeviceSelection.Resolve(devices, AppSettings.TargetDeviceSerial);
+            DeviceSelection selection = DeviceSelection.ResolveWithFailover(devices,
+                AppSettings.TargetDeviceSerial, DeviceSelection.ActiveSerial);
+            snapshot.AutoSwitchedToFallback = selection.JustSwitched;
+            snapshot.SwitchedBackToPreferred = selection.SwitchBack;
+            snapshot.SwitchFromSerial = selection.PreviousSerial;
+            if (selection.Device != null) DeviceSelection.SetActiveSerial(selection.Device.Serial);
             if (selection.Device == null)
             {
                 snapshot.Connected = false;
