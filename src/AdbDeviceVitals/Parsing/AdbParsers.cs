@@ -62,18 +62,84 @@ namespace AdbDeviceVitals.Parsing
             if (comma >= 0) snapshot.OperatorName = snapshot.OperatorName.Substring(0, comma);
         }
 
-        public static void ParseTelephony(string output, DeviceSnapshot snapshot)
+        /// <summary>当前跑数据的 subId。双卡机上不能拿默认卡或第一段信号冒充数据卡。</summary>
+        public static int? ParseActiveDataSubId(string output)
+        {
+            int? subId = ReadInt(output ?? string.Empty, @"mActiveDataSubId\s*=\s*(\d+)");
+            return ValidSignal(subId);
+        }
+
+        /// <summary>
+        /// 用 telephony.registry 自己的事件日志把 subId 映射到 phoneId。日志里两种顺序都出现过：
+        /// notifyServiceStateForSubscriber: subId=1 phoneId=1 / notifyDisplayInfoChanged: PhoneId=1 subId=1。
+        /// 取最后一次出现的映射；找不到就不猜，让调用方回退到旧的首块行为。
+        /// </summary>
+        public static int? ParseActiveDataPhoneId(string output, int? subId = null)
         {
             string text = output ?? string.Empty;
+            if (!subId.HasValue) subId = ParseActiveDataSubId(text);
+            if (!subId.HasValue) return null;
+            string number = subId.Value.ToString(CultureInfo.InvariantCulture);
+            string pattern = @"subId\s*=\s*" + number + @"\s+phoneId\s*=\s*(\d+)"
+                + @"|PhoneId\s*=\s*(\d+)\s+subId\s*=\s*" + number;
+            int? phoneId = null;
+            foreach (Match match in Regex.Matches(text, pattern, RegexOptions.IgnoreCase))
+            {
+                string value = match.Groups[1].Success ? match.Groups[1].Value : match.Groups[2].Value;
+                int parsed;
+                if (int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out parsed))
+                    phoneId = parsed;
+            }
+            return phoneId;
+        }
+
+        public static void ParseTelephony(string output, DeviceSnapshot snapshot)
+        {
+            ParseTelephony(output, snapshot, null);
+        }
+
+        /// <summary>
+        /// phoneId 有值时只解析 "last known state" 中对应的 Phone 块；null 保持旧行为（首个块），
+        /// 供单卡设备或没有 subId 映射日志的 ROM 回退。
+        /// </summary>
+        public static void ParseTelephony(string output, DeviceSnapshot snapshot, int? phoneId)
+        {
+            string text = output ?? string.Empty;
+            if (phoneId.HasValue)
+            {
+                int logsAt = text.IndexOf("local logs:", StringComparison.OrdinalIgnoreCase);
+                string state = logsAt >= 0 ? text.Substring(0, logsAt) : text;
+                string pattern = @"Phone Id\s*=\s*" + phoneId.Value.ToString(CultureInfo.InvariantCulture)
+                    + @"\s*\r?\n(?<body>.*?)(?=\r?\n\s*Phone Id\s*=|$)";
+                Match block = Regex.Match(state, pattern, RegexOptions.IgnoreCase | RegexOptions.Singleline);
+                if (!block.Success)
+                {
+                    // 明确指定了数据卡却找不到它的块：宁可显示未知，也不能拿另一张卡的信号冒充。
+                    snapshot.RsrpDbm = null;
+                    snapshot.RsrqDb = null;
+                    snapshot.SinrDb = null;
+                    snapshot.SignalLevel = null;
+                    snapshot.SignalPhoneId = null;
+                    return;
+                }
+                text = block.Groups["body"].Value;
+                snapshot.SignalPhoneId = phoneId;
+            }
+
+            string nrType = null;
             Match nr = Regex.Match(text, @"mNr=CellSignalStrengthNr:\{([^}]*)\}", RegexOptions.IgnoreCase);
             if (nr.Success)
             {
                 string block = nr.Groups[1].Value;
-                snapshot.RsrpDbm = ValidSignal(ReadInt(block, @"ssRsrp\s*=\s*(-?\d+)"));
-                snapshot.RsrqDb = ValidSignal(ReadInt(block, @"ssRsrq\s*=\s*(-?\d+)"));
-                snapshot.SinrDb = ValidSignal(ReadInt(block, @"ssSinr\s*=\s*(-?\d+)"));
-                snapshot.SignalLevel = ReadInt(block, @"(?:miuiLevel|level)\s*=\s*(\d+)");
-                if (snapshot.RsrpDbm.HasValue && string.IsNullOrEmpty(snapshot.NetworkType)) snapshot.NetworkType = "NR";
+                int? rsrp = ValidSignal(ReadInt(block, @"ssRsrp\s*=\s*(-?\d+)"));
+                if (rsrp.HasValue)
+                {
+                    snapshot.RsrpDbm = rsrp;
+                    snapshot.RsrqDb = ValidSignal(ReadInt(block, @"ssRsrq\s*=\s*(-?\d+)"));
+                    snapshot.SinrDb = ValidSignal(ReadInt(block, @"ssSinr\s*=\s*(-?\d+)"));
+                    snapshot.SignalLevel = ReadInt(block, @"(?:miuiLevel|level)\s*=\s*(\d+)");
+                    nrType = "NR";
+                }
             }
 
             if (!snapshot.RsrpDbm.HasValue)
@@ -82,14 +148,23 @@ namespace AdbDeviceVitals.Parsing
                 if (lte.Success)
                 {
                     string block = lte.Groups[1].Value;
-                    snapshot.RsrpDbm = ValidSignal(ReadInt(block, @"rsrp=(-?\d+)"));
-                    snapshot.RsrqDb = ValidSignal(ReadInt(block, @"rsrq=(-?\d+)"));
-                    int? rssnr = ValidSignal(ReadInt(block, @"rssnr=(-?\d+)"));
-                    if (rssnr.HasValue) snapshot.SinrDb = (int)Math.Round(rssnr.Value / 10.0);
-                    snapshot.SignalLevel = ReadInt(block, @"(?:miuiLevel|level)=(\d+)");
-                    if (snapshot.RsrpDbm.HasValue && string.IsNullOrEmpty(snapshot.NetworkType)) snapshot.NetworkType = "LTE";
+                    int? rsrp = ValidSignal(ReadInt(block, @"rsrp=(-?\d+)"));
+                    if (rsrp.HasValue)
+                    {
+                        snapshot.RsrpDbm = rsrp;
+                        snapshot.RsrqDb = ValidSignal(ReadInt(block, @"rsrq=(-?\d+)"));
+                        int? rssnr = ValidSignal(ReadInt(block, @"rssnr=(-?\d+)"));
+                        if (rssnr.HasValue) snapshot.SinrDb = (int)Math.Round(rssnr.Value / 10.0);
+                        snapshot.SignalLevel = ReadInt(block, @"(?:miuiLevel|level)=(\d+)");
+                        nrType = "LTE";
+                    }
                 }
             }
+
+            // 双卡时 getprop gsm.network.type 是逗号拼接的（如 "LTE,NR_SA"），首段不代表数据卡，
+            // 因此解析到具体 Phone 块后直接用该块的网络类型覆盖。
+            if (nrType != null && phoneId.HasValue) snapshot.NetworkType = nrType;
+            else if (nrType != null && string.IsNullOrEmpty(snapshot.NetworkType)) snapshot.NetworkType = nrType;
 
             Match display = Regex.Match(text, @"mTelephonyDisplayInfo=TelephonyDisplayInfo\s*\{network=([^,}]+)", RegexOptions.IgnoreCase);
             if (display.Success && (string.IsNullOrEmpty(snapshot.NetworkType) || snapshot.NetworkType == "Unknown"))

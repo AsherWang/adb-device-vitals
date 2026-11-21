@@ -192,6 +192,24 @@ namespace AdbDeviceVitals.Services
             set { Update(delegate(SettingsData data) { data.TargetDeviceSerial = (value ?? string.Empty).Trim(); }, false, true); }
         }
 
+        /// <summary>每台手机对应的余量运营商映射（serial|运营商枚举值，分号分隔）。</summary>
+        public static string CarrierByDevice
+        {
+            get { lock (Gate) { return _current.CarrierByDevice ?? string.Empty; } }
+            set { Update(delegate(SettingsData data) { data.CarrierByDevice = (value ?? string.Empty).Trim(); }, false, true); }
+        }
+
+        /// <summary>当前目标设备指定的运营商；没有映射或自动模式时返回 None。</summary>
+        public static TrafficCarrier CurrentCarrier
+        {
+            get
+            {
+                string serial = TargetDeviceSerial;
+                if (serial.Length == 0) return TrafficCarrier.None;
+                lock (Gate) { return CarrierMapping.Get(_current.CarrierByDevice, serial); }
+            }
+        }
+
         public static DateTime? LastUpdateCheckUtc
         {
             get { lock (Gate) { return _current.LastUpdateCheckUtc; } }

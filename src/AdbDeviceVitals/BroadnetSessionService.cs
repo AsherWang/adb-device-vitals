@@ -24,12 +24,13 @@ namespace AdbDeviceVitals
     /// 注意本文件刻意放在项目根目录而不是 Services\：测试项目用通配符链接 Services\*.cs，
     /// 它没有 WebView2 引用，放进去会编译失败。
     /// </summary>
-    internal sealed class BroadnetSessionService
+    internal sealed class BroadnetSessionService : ICarrierTrafficService
     {
         internal const string LoginUrl = "https://www.10099.com.cn/login.html";
         // 套餐余量在「个人中心」页，登录后跳到 index.html 只是首页，DOM 里没有流量数据。
         private const string PersonalCenterUrl = "https://www.10099.com.cn/personal-center-number-order.html";
-        private const string SnapshotFileName = "broadnet-session.json";
+        private const string DefaultPathPrefix = "broadnet";
+        private string _pathPrefix = DefaultPathPrefix;
 
         // 登录判据：优先认 broadnetUserSessionId（调研确认登录后写入、登出时清除）。
         // 辅以 broadnetUserPhoneInfo.isLogin，再兜底扫描含 session/token/login 的键，
@@ -99,13 +100,14 @@ namespace AdbDeviceVitals
         }
 
         /// <summary>由 App 启动后调用一次。目录不存在时创建，失败不阻断程序。</summary>
-        internal void Initialize(string configDirectory)
+        public void Initialize(string configDirectory, string pathPrefix)
         {
+            _pathPrefix = string.IsNullOrWhiteSpace(pathPrefix) ? DefaultPathPrefix : pathPrefix.Trim();
             try
             {
                 Directory.CreateDirectory(configDirectory);
-                _snapshotPath = Path.Combine(configDirectory, SnapshotFileName);
-                _userDataFolder = Path.Combine(configDirectory, "broadnet-webview");
+                _snapshotPath = Path.Combine(configDirectory, _pathPrefix + "-session.json");
+                _userDataFolder = Path.Combine(configDirectory, _pathPrefix + "-webview");
                 Directory.CreateDirectory(_userDataFolder);
             }
             catch (Exception ex)
@@ -114,25 +116,25 @@ namespace AdbDeviceVitals
             }
         }
 
-        internal bool IsLoggedIn { get { lock (_gate) return _loggedIn; } }
+        public bool IsLoggedIn { get { lock (_gate) return _loggedIn; } }
         internal string Phone { get { lock (_gate) return _phone; } }
-        internal string Status { get { lock (_gate) return _status; } }
+        public string Status { get { lock (_gate) return _status; } }
 
         /// <summary>是否有可恢复的登录快照。没有就不该为「自动查询」初始化 WebView2。</summary>
-        internal bool HasSnapshot
+        public bool HasSnapshot
         {
             get { return !string.IsNullOrEmpty(_snapshotPath) && File.Exists(_snapshotPath); }
         }
 
         /// <summary>最近一次静默刷新是否判定会话过期；主窗口据此把卡片退回「点击查询」。</summary>
-        internal bool LastAttemptExpired { get; private set; }
+        public bool LastAttemptExpired { get; private set; }
 
         /// <summary>
         /// 确保处于已登录状态：已登录直接返回 true；否则弹出 WebView 窗口交给用户人工登录，
         /// 检测到登录（或用户点「我已登录」）后自动隐藏窗口并返回 true；用户关闭窗口返回 false。
         /// 必须在 UI 线程调用。
         /// </summary>
-        internal async Task<bool> EnsureLoggedInAsync()
+        public async Task<bool> EnsureLoggedInAsync()
         {
             if (IsLoggedIn) return true;
             if (string.IsNullOrEmpty(_userDataFolder))
@@ -247,7 +249,7 @@ namespace AdbDeviceVitals
         /// <summary>
         /// 人工登录入口（只登录不读流量）：与后台静默刷新串行化。
         /// </summary>
-        internal async Task<bool> EnsureLoggedInSerializedAsync()
+        public async Task<bool> EnsureLoggedInSerializedAsync()
         {
             await _trafficGate.WaitAsync();
             try { return await EnsureLoggedInAsync(); }
@@ -258,7 +260,7 @@ namespace AdbDeviceVitals
         /// 人工「点卡片查询」完整链路：登录 + 读余量整段持闸，杜绝中途被静默刷新插入
         /// 造成两次导航并发（WebView2 并发导航会直接崩进程）。
         /// </summary>
-        internal async Task<BroadnetTraffic> EnsureAndReadTrafficAsync()
+        public async Task<BroadnetTraffic> EnsureAndReadTrafficAsync()
         {
             await _trafficGate.WaitAsync();
             try
@@ -275,7 +277,7 @@ namespace AdbDeviceVitals
         /// 会话过期则删快照、清登录态，由调用方把卡片退回「点击查询」。
         /// 与人工登录共用 _trafficGate 串行化，避免并发导航搞崩 WebView2。
         /// </summary>
-        internal async Task<BroadnetTraffic> RefreshTrafficSilentlyAsync()
+        public async Task<BroadnetTraffic> RefreshTrafficSilentlyAsync()
         {
             LastAttemptExpired = false;
             // 没有任何可复用的登录态：连 WebView2 都不初始化，直接放弃。
@@ -321,17 +323,27 @@ namespace AdbDeviceVitals
                 string freshUrl = PersonalCenterUrl + "?_t=" + DateTime.UtcNow.Ticks.ToString(
                     System.Globalization.CultureInfo.InvariantCulture);
                 _window.BeginApiCapture();
-                await _window.NavigateAndWaitAsync(freshUrl);
+                bool navigated = await _window.NavigateAndWaitAsync(freshUrl);
                 // qryBillInfo / qrySubscribeBusiness 等比 qryUserRes 晚到（异步 ajax），
                 // 等一小会儿再收网，否则话费余额会因 capture 已关而丢失。
                 for (int i = 0; i < 6 && _window.GetApiBody("qryBillInfo") == null; i++)
                     await Task.Delay(300);
                 Detection check = ParseDetection(await _window.EvaluateAsync(DetectScript));
                 WriteTrace("silent: check logged=" + (check.Logged ? "1" : "0")
-                    + " onLoginPage=" + (check.OnLoginPage ? "1" : "0"));
+                    + " onLoginPage=" + (check.OnLoginPage ? "1" : "0") + " navigated=" + (navigated ? "1" : "0"));
                 if (!check.Logged || check.OnLoginPage)
                 {
                     _window.EndApiCapture();
+                    // 关键：导航超时（20s 没等到 NavigationCompleted）且页面不在登录页，
+                    // 说明页面根本没加载出来（网络抖动/站点慢），此时 sessionStorage 读不到
+                    // 是「没加载」而非「已过期」。保留快照，下个 10min 周期重试；
+                    // 否则一次抖动就把仍有效的登录态删掉，逼用户重新登录（2026-11-20 21:24 实测）。
+                    // 真正过期时站点会跳到 login.html → onLoginPage=1，照常 MarkExpired。
+                    if (!navigated && !check.OnLoginPage)
+                    {
+                        WriteTrace("silent: navigation timed out before page load, keep snapshot for retry");
+                        return null;
+                    }
                     MarkExpired("登录态已过期");
                     return null;
                 }
@@ -377,7 +389,7 @@ namespace AdbDeviceVitals
         }
 
         /// <summary>外部（托盘入口）也可记一笔，用于确认菜单点击是否真的进了流程。</summary>
-        internal void Trace(string message) { WriteTrace(message); }
+        public void Trace(string message) { WriteTrace(message); }
 
         /// <summary>把阶段进展写到 trace 日志，便于「点了没反应」时定位卡在哪一步。</summary>
         private void WriteTrace(string message)
@@ -389,7 +401,7 @@ namespace AdbDeviceVitals
                     : Path.GetDirectoryName(_snapshotPath);
                 if (string.IsNullOrEmpty(dir)) return;
                 Directory.CreateDirectory(dir);
-                string path = Path.Combine(dir, "broadnet-trace.log");
+                string path = Path.Combine(dir, _pathPrefix + "-trace.log");
                 File.AppendAllText(path,
                     DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss") + "  " + message + Environment.NewLine,
                     System.Text.Encoding.UTF8);
@@ -472,7 +484,7 @@ namespace AdbDeviceVitals
         ///   A（兜底）— 接口没抓到或解析失败时，回退到稳定的 CSS class DOM 提取。
         /// 两条路都拿不到才返回 null。字段/URL 来自 2026-11-16 抓包实测，站点改版需同步更新。
         /// </summary>
-        internal async Task<BroadnetTraffic> ReadTrafficAsync()
+        public async Task<BroadnetTraffic> ReadTrafficAsync()
         {
             if (!IsLoggedIn || _window == null || _window.BrowserView.CoreWebView2 == null) return null;
             try
@@ -708,7 +720,7 @@ namespace AdbDeviceVitals
 })()";
 
         /// <summary>退出程序时真正销毁 WebView2 控件与定时器。</summary>
-        internal void Shutdown()
+        public void Shutdown()
         {
             _pollTimer.Stop();
             if (_window != null)
@@ -797,7 +809,7 @@ namespace AdbDeviceVitals
             {
                 string path = Path.Combine(
                     string.IsNullOrEmpty(_snapshotPath) ? AppSettings.ConfigDirectory : Path.GetDirectoryName(_snapshotPath),
-                    "broadnet-error.log");
+                    _pathPrefix + "-error.log");
                 string line = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss") + "  " + ex + Environment.NewLine;
                 File.AppendAllText(path, line, System.Text.Encoding.UTF8);
             }
@@ -918,32 +930,8 @@ namespace AdbDeviceVitals
         {
             internal bool Logged;
             internal bool OnLoginPage;
-            internal string Phone = string.Empty;
+            public string Phone = string.Empty;
         }
     }
 
-    /// <summary>个人中心页读出的套餐余量（一个号码可能有多个流量包）。</summary>
-    internal sealed class BroadnetTraffic
-    {
-        internal string Phone = string.Empty;
-        internal string Balance = string.Empty;       // 话费余额，元
-        internal string MonthlySpend = string.Empty;  // 当月消费，元
-        internal string MonthlyUsed = string.Empty;   // 本月已用流量，形如 "120.19 G"（各包 addupValue 之和）
-        internal double MonthlyUsedKb;                // 本月已用原始 KB（未四舍五入），供用量统计差分
-        internal System.Collections.Generic.List<BroadnetPackage> Packages =
-            new System.Collections.Generic.List<BroadnetPackage>();
-    }
-
-    internal sealed class BroadnetPackage
-    {
-        internal string Name = string.Empty;
-        internal string Used = string.Empty;
-        internal string Remain = string.Empty;
-        internal string Total = string.Empty;
-        internal string Unit = string.Empty;
-        // 原始 KB 数值（未格式化），只用于用量统计的按包差分。
-        internal double UsedKb;
-        internal double RemainKb;
-        internal double TotalKb;
-    }
 }

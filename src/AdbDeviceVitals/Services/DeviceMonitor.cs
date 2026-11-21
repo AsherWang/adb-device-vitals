@@ -134,7 +134,15 @@ namespace AdbDeviceVitals.Services
             DeviceSnapshot target = seed.Copy();
             AdbParsers.ParseRadioProperties(network.Output, operatorName.Output, target);
             CommandResult telephony = await _adb.RunShellAsync(serial, "dumpsys telephony.registry", 8000).ConfigureAwait(false);
-            if (telephony.Success) AdbParsers.ParseTelephony(telephony.Output, target);
+            if (telephony.Success)
+            {
+                int? subId = AdbParsers.ParseActiveDataSubId(telephony.Output);
+                int? phoneId = AdbParsers.ParseActiveDataPhoneId(telephony.Output, subId);
+                target.ActiveDataSubId = subId;
+                target.SignalPhoneId = phoneId;
+                // 有数据卡映射就只读它的信号块；映射不到时走旧的首块行为。
+                AdbParsers.ParseTelephony(telephony.Output, target, phoneId);
+            }
             parts.Signal = target;
         }
 
@@ -197,6 +205,8 @@ namespace AdbDeviceVitals.Services
                 target.RsrqDb = parts.Signal.RsrqDb;
                 target.SinrDb = parts.Signal.SinrDb;
                 target.SignalLevel = parts.Signal.SignalLevel;
+                target.ActiveDataSubId = parts.Signal.ActiveDataSubId;
+                target.SignalPhoneId = parts.Signal.SignalPhoneId;
             }
 
             if (parts.Tethering != null)

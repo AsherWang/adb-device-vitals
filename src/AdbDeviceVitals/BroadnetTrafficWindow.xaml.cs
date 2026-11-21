@@ -19,6 +19,15 @@ namespace AdbDeviceVitals
             _refresh = refresh;
         }
 
+        /// <summary>打开窗口前由主窗口设置运营商名，标题和引导文案跟着走。</summary>
+        internal void SetCarrier(string name)
+        {
+            string carrier = string.IsNullOrEmpty(name) ? "运营商" : name;
+            WindowTitle.Title = carrier + "套餐余量";
+            Title = carrier + "套餐余量";
+            SummaryText.Text = "点「刷新」从" + carrier + "营业厅读取；首次使用会弹出窗口让你自己登录。";
+        }
+
         internal void Apply(BroadnetTraffic traffic)
         {
             Apply(traffic, null);

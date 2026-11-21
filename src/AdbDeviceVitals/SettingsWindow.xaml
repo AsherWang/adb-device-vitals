@@ -64,7 +64,7 @@
                 <StackPanel x:Name="Nav">
                     <RadioButton Content="常规" Tag="0" GroupName="SettingsNav" IsChecked="True"
                                  Style="{StaticResource SettingsNavItem}" Click="NavItem_Click" />
-                    <RadioButton Content="ADB 与设备" Tag="1" GroupName="SettingsNav"
+                    <RadioButton x:Name="NavDevices" Content="ADB 与设备" Tag="1" GroupName="SettingsNav"
                                  Style="{StaticResource SettingsNavItem}" Click="NavItem_Click" />
                     <RadioButton Content="自动化" Tag="2" GroupName="SettingsNav"
                                  Style="{StaticResource SettingsNavItem}" Click="NavItem_Click" />
@@ -145,6 +145,21 @@
                                     <Button Grid.Column="1" x:Name="RefreshDevicesButton" Content="刷新列表" Padding="14,6" Margin="8,0,0,0" Click="RefreshDevicesButton_Click" />
                                 </Grid>
                                 <TextBlock x:Name="DeviceHintText" Text="" FontSize="12" Opacity="0.72" Margin="0,10,0,0" TextWrapping="Wrap" />
+                                <Grid Margin="0,14,0,0">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto" />
+                                        <ColumnDefinition Width="*" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Grid.Column="0" Text="流量运营商" FontSize="13" VerticalAlignment="Center" Margin="0,0,14,0" />
+                                    <ComboBox Grid.Column="1" x:Name="DeviceCarrierBox" VerticalContentAlignment="Center"
+                                              SelectionChanged="DeviceCarrierBox_SelectionChanged">
+                                        <ComboBoxItem Content="不查询（默认）" Tag="0" />
+                                        <ComboBoxItem Content="中国广电" Tag="1" />
+                                        <ComboBoxItem Content="中国电信" Tag="2" />
+                                    </ComboBox>
+                                </Grid>
+                                <TextBlock x:Name="CarrierHintText" Text="为主界面余量卡指定这台手机的运营商；留「不查询」则该设备不显示流量卡。"
+                                           FontSize="12" Opacity="0.62" Margin="0,8,0,0" TextWrapping="Wrap" />
                             </StackPanel>
                         </ui:Card>
                     </StackPanel>

@@ -13,6 +13,7 @@ namespace AdbDeviceVitals.Services
             Schema = 1;
             AdbDirectory = string.Empty;
             TargetDeviceSerial = string.Empty;
+            CarrierByDevice = string.Empty;
             SmsSenderFilter = string.Empty;
             // 读短信属于需要显式授权的能力：默认关闭，旧配置文件缺这个字段也按关闭处理。
             SmsSyncEnabled = false;
@@ -23,6 +24,7 @@ namespace AdbDeviceVitals.Services
         public int Schema;
         public string AdbDirectory;
         public string TargetDeviceSerial;
+        public string CarrierByDevice;
         public bool RunAtStartup;
         public bool AutoEnableUsbTethering;
         public bool AutoStartPcHotspot;
@@ -39,6 +41,7 @@ namespace AdbDeviceVitals.Services
                 Schema = Schema,
                 AdbDirectory = AdbDirectory,
                 TargetDeviceSerial = TargetDeviceSerial,
+                CarrierByDevice = CarrierByDevice ?? string.Empty,
                 RunAtStartup = RunAtStartup,
                 AutoEnableUsbTethering = AutoEnableUsbTethering,
                 AutoStartPcHotspot = AutoStartPcHotspot,
@@ -98,6 +101,7 @@ namespace AdbDeviceVitals.Services
             text.AppendLine("  \"schema\": " + (data.Schema > 0 ? data.Schema : 1).ToString(CultureInfo.InvariantCulture) + ",");
             text.AppendLine("  \"AdbDirectory\": \"" + Escape(data.AdbDirectory) + "\",");
             text.AppendLine("  \"TargetDeviceSerial\": \"" + Escape(data.TargetDeviceSerial) + "\",");
+            text.AppendLine("  \"CarrierByDevice\": \"" + Escape(data.CarrierByDevice) + "\",");
             text.AppendLine("  \"RunAtStartup\": " + BooleanText(data.RunAtStartup) + ",");
             text.AppendLine("  \"AutoEnableUsbTethering\": " + BooleanText(data.AutoEnableUsbTethering) + ",");
             text.AppendLine("  \"AutoStartPcHotspot\": " + BooleanText(data.AutoStartPcHotspot) + ",");
@@ -131,6 +135,10 @@ namespace AdbDeviceVitals.Services
             else if (string.Equals(key, "TargetDeviceSerial", StringComparison.OrdinalIgnoreCase))
             {
                 data.TargetDeviceSerial = (value ?? string.Empty).Trim();
+            }
+            else if (string.Equals(key, "CarrierByDevice", StringComparison.OrdinalIgnoreCase))
+            {
+                data.CarrierByDevice = (value ?? string.Empty).Trim();
             }
             else if (string.Equals(key, "SmsSenderFilter", StringComparison.OrdinalIgnoreCase))
             {

@@ -40,12 +40,13 @@ $hoverPng = Join-Path $artifacts 'wpf-main-hover.png'
 $altPng = Join-Path $artifacts 'wpf-main-alt.png'
 $batteryPng = Join-Path $artifacts 'wpf-battery-details.png'
 $broadnetPng = Join-Path $artifacts 'wpf-broadnet-details.png'
+$settingsDevicesPng = Join-Path $artifacts 'wpf-settings-devices.png'
 
 & $dotnet build (Join-Path $root 'tests\AdbDeviceVitals.RenderTest.csproj') -c Release -tl:off | Out-Null
 if ($LASTEXITCODE -ne 0) { throw "Render project build failed with exit code $LASTEXITCODE." }
-& $dotnet (Join-Path $testOutput 'RenderSmokeTest.dll') $mainPng $settingsPng $smsPng $detailsPng $hoverPng $altPng $batteryPng $broadnetPng
+& $dotnet (Join-Path $testOutput 'RenderSmokeTest.dll') $mainPng $settingsPng $smsPng $detailsPng $hoverPng $altPng $batteryPng $broadnetPng $settingsDevicesPng
 if ($LASTEXITCODE -ne 0) { throw "Render smoke test failed with exit code $LASTEXITCODE." }
-$allPng = @($mainPng, $settingsPng, $smsPng, $detailsPng, $hoverPng, $altPng, $batteryPng, $broadnetPng)
+$allPng = @($mainPng, $settingsPng, $smsPng, $detailsPng, $hoverPng, $altPng, $batteryPng, $broadnetPng, $settingsDevicesPng)
 foreach ($png in $allPng) {
     if (-not (Test-Path -LiteralPath $png)) { throw "Missing render output: $png" }
 }

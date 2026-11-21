@@ -71,6 +71,8 @@ internal static class RenderSmokeTest
             // 广电详情窗：必须注入带套餐行的数据，覆盖 DataTemplate 的绑定（曾因
             // Run.Text 默认 TwoWay 绑到只读属性抛 XamlParseException，窗口卡死）。
             if (_args.Length > 7) RenderBroadnetDetails(_args[7]);
+            // 设置页「ADB 与设备」：验证新增的流量运营商下拉渲染且不重叠。
+            if (_args.Length > 8) RenderSettingsDevices(_args[8]);
             _result = 0;
         }
         catch (Exception ex)
@@ -112,6 +114,11 @@ internal static class RenderSmokeTest
                 DateTime.Now
             });
 
+        System.Windows.Controls.TextBlock signalSource = NamedElement(window, "SignalSourceText")
+            as System.Windows.Controls.TextBlock;
+        if (signalSource == null || signalSource.Text.IndexOf("流量卡", StringComparison.Ordinal) < 0)
+            throw new InvalidOperationException("Signal card should mark the active data SIM.");
+
         // 第三张卡片只留电量 + 温度两个结论，供电 / 电压 / 容量等旧控件必须只在 ⓘ 弹窗里。
         System.Windows.Controls.TextBlock battery = NamedElement(window, "CardBatteryValue") as System.Windows.Controls.TextBlock;
         if (battery == null || battery.Text != "100%")
@@ -136,6 +143,10 @@ internal static class RenderSmokeTest
             as System.Windows.Controls.TextBlock;
         if (balance == null || !balance.Text.Contains("话费"))
             throw new InvalidOperationException("Broadnet card should show phone balance.");
+        System.Windows.Controls.TextBlock carrierLabel = NamedElement(window, "BroadnetCarrierValue")
+            as System.Windows.Controls.TextBlock;
+        if (carrierLabel == null) throw new MissingFieldException("BroadnetCarrierValue");
+        carrierLabel.Text = "· 中国广电";
         System.Windows.Controls.TextBlock used = NamedElement(window, "BroadnetUsedValue")
             as System.Windows.Controls.TextBlock;
         if (used == null) throw new MissingFieldException("BroadnetUsedValue");
@@ -274,6 +285,10 @@ internal static class RenderSmokeTest
         System.Windows.Controls.TextBlock detail = NamedElement(window, "TetherDetailText") as System.Windows.Controls.TextBlock;
         if (mode == null || detail == null || mode.Text != "USB + Wi-Fi" || !detail.Text.Contains("上游"))
             throw new InvalidOperationException("Tethering details missing from network details window.");
+        System.Windows.Controls.TextBlock signalSource = NamedElement(window, "SignalSourceText")
+            as System.Windows.Controls.TextBlock;
+        if (signalSource == null || signalSource.Text.IndexOf("数据卡", StringComparison.Ordinal) < 0)
+            throw new InvalidOperationException("Network details should show which SIM the signal came from.");
         Save(window, path);
         window.FocusTethering(); // 从「网速」ⓘ 进入时的滚动定位不应抛异常
         DoEvents();
@@ -313,6 +328,22 @@ internal static class RenderSmokeTest
     {
         // 传 null ADB：Loaded 里只显示「未检测到 ADB」，不会真的启动 adb.exe。
         SettingsWindow window = Prepare(new SettingsWindow(null, delegate { return Task.CompletedTask; }));
+        Save(window, path);
+    }
+
+    private static void RenderSettingsDevices(string path)
+    {
+        SettingsWindow window = Prepare(new SettingsWindow(null, delegate { return Task.CompletedTask; }));
+        System.Reflection.MethodInfo nav = typeof(SettingsWindow).GetMethod("NavItem_Click",
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+        System.Windows.Controls.RadioButton item = NamedElement(window, "NavDevices") as System.Windows.Controls.RadioButton;
+        if (nav == null || item == null)
+            throw new InvalidOperationException("Settings device nav not found.");
+        nav.Invoke(window, new object[] { item, null });
+        window.UpdateLayout();
+        System.Windows.Controls.ComboBox carrier = NamedElement(window, "DeviceCarrierBox") as System.Windows.Controls.ComboBox;
+        if (carrier == null || carrier.Items.Count != 3)
+            throw new InvalidOperationException("Device carrier combo should have 3 choices.");
         Save(window, path);
     }
 
@@ -510,6 +541,8 @@ internal static class RenderSmokeTest
         sample.RsrpDbm = -79;
         sample.RsrqDb = -11;
         sample.SinrDb = 18;
+        sample.ActiveDataSubId = 7;
+        sample.SignalPhoneId = 1;
         sample.HotspotActive = true;
         sample.HotspotBand = "2.4 GHz";
         sample.HotspotFrequencyMhz = 2412;

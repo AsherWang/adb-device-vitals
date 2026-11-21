@@ -37,6 +37,7 @@ namespace AdbDeviceVitals
             SignalLevelText.Text = snapshot.SignalLevel.HasValue
                 ? snapshot.SignalLevel.Value + " / 4"
                 : "—";
+            SignalSourceText.Text = SignalSource(snapshot);
 
             ModelText.Text = Text(snapshot.DeviceModel);
             SerialText.Text = Text(snapshot.DeviceSerial);
@@ -92,6 +93,14 @@ namespace AdbDeviceVitals
                 details.Add(value.ConnectedClients + " 台设备");
             }
             return string.Join("  ·  ", details.ToArray());
+        }
+
+        private static string SignalSource(DeviceSnapshot value)
+        {
+            if (!value.SignalPhoneId.HasValue) return "未定位数据卡 · 取首个调制解调器";
+            string text = "当前数据卡 · Phone " + value.SignalPhoneId.Value;
+            if (value.ActiveDataSubId.HasValue) text += "（subId " + value.ActiveDataSubId.Value + "）";
+            return text;
         }
 
         private static string SafeText(string value, string fallback)

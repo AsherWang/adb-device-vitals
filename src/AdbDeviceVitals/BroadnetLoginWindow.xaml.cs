@@ -32,6 +32,12 @@ namespace AdbDeviceVitals
             new System.Collections.Generic.Dictionary<string, string>();
         private volatile bool _captureApiResponses;
 
+        /// <summary>
+        /// 需要拦截的接口名（URL 路径里的关键词 → 缓存 key）。默认广电四个接口；
+        /// 电信服务创建窗口时替换为自己的接口名。按 URL 路径片段匹配，与 host 无关。
+        /// </summary>
+        internal string[] ApiKeyPatterns = { "qryUserRes", "qryBillInfo", "qryBalanceFee", "qrySubscribeBusiness" };
+
         internal BroadnetLoginWindow()
         {
             InitializeComponent();
@@ -123,14 +129,19 @@ namespace AdbDeviceVitals
             }
         }
 
-        private static string NormalizeApiKey(string url)
+        private string NormalizeApiKey(string url)
         {
             if (string.IsNullOrEmpty(url)) return null;
-            // 接口都在 /contact-web/api/busi/ 下，按函数名规范化，避免依赖完整 host。
-            if (url.IndexOf("/qryUserRes", StringComparison.OrdinalIgnoreCase) >= 0) return "qryUserRes";
-            if (url.IndexOf("/qryBillInfo", StringComparison.OrdinalIgnoreCase) >= 0) return "qryBillInfo";
-            if (url.IndexOf("/qryBalanceFee", StringComparison.OrdinalIgnoreCase) >= 0) return "qryBalanceFee";
-            if (url.IndexOf("/qrySubscribeBusiness", StringComparison.OrdinalIgnoreCase) >= 0) return "qrySubscribeBusiness";
+            string[] patterns = ApiKeyPatterns;
+            if (patterns == null) return null;
+            // 按接口函数名匹配 URL 路径，去掉 query（电信的签名全在 ?zgk12BhG= 里）。
+            int query = url.IndexOf('?');
+            string path = query > 0 ? url.Substring(0, query) : url;
+            foreach (string pattern in patterns)
+            {
+                if (!string.IsNullOrEmpty(pattern) && path.IndexOf(pattern, StringComparison.OrdinalIgnoreCase) >= 0)
+                    return pattern;
+            }
             return null;
         }
 
@@ -162,7 +173,8 @@ namespace AdbDeviceVitals
         /// 否则 sessionStorage 还属于 about:blank，写进去的值在跳到 10099 后就丢了。
         /// 登录页的 WAF 挑战会触发多次导航，只要有一次完成就返回。
         /// </summary>
-        internal async Task NavigateAndWaitAsync(string url)
+        /// <summary>导航并等待完成；返回 false 表示 20 秒内没等到 NavigationCompleted（页面可能还在加载/超时）。</summary>
+        internal async Task<bool> NavigateAndWaitAsync(string url)
         {
             CoreWebView2 core = Browser.CoreWebView2;
             if (core == null)
@@ -179,7 +191,9 @@ namespace AdbDeviceVitals
             Navigate(url);
             // WAF 挑战 / 网络异常时可能一直等不到完成事件，设个上限，宁可让页面继续
             // 加载也不把「等待登录」永久挂住（定时检测仍会继续跑）。
-            await Task.WhenAny(done.Task, Task.Delay(TimeSpan.FromSeconds(20)));
+            bool completed = await Task.WhenAny(done.Task, Task.Delay(TimeSpan.FromSeconds(20))) == done.Task;
+            if (!completed) core.NavigationCompleted -= handler; // 超时也要摘掉，避免反复导航累积订阅
+            return completed;
         }
 
         /// <summary>异步执行 JS 并返回 WebView2 的 JSON 表示（字符串会带引号）。</summary>

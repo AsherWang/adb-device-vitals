@@ -36,6 +36,7 @@ namespace AdbDeviceVitals
 
         private readonly Dictionary<string, CardLabels> _cards = new Dictionary<string, CardLabels>();
         private readonly AdbClient _adb = new AdbClient();
+        private readonly CarrierDetector _carrierDetector;
         private readonly DeviceMonitor _monitor;
         private readonly CsvLogger _logger = new CsvLogger();
         private readonly SmsInboxService _smsService;
@@ -46,7 +47,20 @@ namespace AdbDeviceVitals
         private readonly DispatcherTimer _publicIpDebounce;
         private readonly DispatcherTimer _broadnetTimer;
         private readonly BroadnetSessionService _broadnet = new BroadnetSessionService();
-        private readonly BroadnetUsageStore _usageStore = new BroadnetUsageStore();
+        private readonly TelecomSessionService _telecom = new TelecomSessionService();
+        // 当前生效的运营商服务：由「当前设备 → 运营商」映射决定，无映射时按广电兜底。
+        private ICarrierTrafficService _trafficService;
+        private TrafficCarrier _currentCarrier = TrafficCarrier.None;
+        // 卡片/详情窗当前读数归属的设备与运营商。异步读取完成后必须核对，
+        // 否则「启动时先按广电读、随后识别出电信」这种竞态会把上一家的数据填进当前卡。
+        private string _trafficDeviceSerial = string.Empty;
+        private string _trafficWindowSerial = string.Empty;
+        private TrafficCarrier _trafficWindowCarrier = TrafficCarrier.None;
+        private bool _broadnetAutoEnabled;
+        // 设备 SIM 自动识别的运营商（仅内存，不写配置）。手动映射优先于此值。
+        private TrafficCarrier _autoDetectedCarrier = TrafficCarrier.None;
+        private string _autoDetectedSerial = string.Empty;
+        private BroadnetUsageStore _usageStore = new BroadnetUsageStore();
 
         private WF.NotifyIcon _tray;
         private SmsWindow _smsWindow;
@@ -93,9 +107,12 @@ namespace AdbDeviceVitals
         public MainWindow()
         {
             InitializeComponent();
+            _carrierDetector = new CarrierDetector(_adb);
             _monitor = new DeviceMonitor(_adb);
             _smsService = new SmsInboxService(_adb);
-            _broadnet.Initialize(AppSettings.ConfigDirectory);
+            _broadnet.Initialize(AppSettings.ConfigDirectory, CarrierMapping.CodeName(TrafficCarrier.Broadnet));
+            _telecom.Initialize(AppSettings.ConfigDirectory, CarrierMapping.CodeName(TrafficCarrier.Telecom));
+            SelectTrafficService();
 
             _cards["traffic"] = new CardLabels(CardTrafficValue, CardTrafficDetail);
 
@@ -179,12 +196,10 @@ namespace AdbDeviceVitals
 
             _timer.Start();
             _publicIpTimer.Start();
-            if (!skipBroadnetAuto)
-            {
-                _broadnetTimer.Start();
-                // 有登录快照就后台自己取一次余量；没有就保持卡片上的「点击查询」，不弹窗。
-                _ = RefreshBroadnetSilentAsync();
-            }
+            _broadnetAutoEnabled = !skipBroadnetAuto;
+            if (_broadnetAutoEnabled) _broadnetTimer.Start();
+            // 首次静默刷新挪到 StartInitialWork：等目标设备与运营商识别完成后再读，
+            // 避免用默认广电服务读到旧快照，随后运营商切成电信时数据串卡。
             _ = RefreshPublicIpAsync();
             RefreshSmsPreview();
             StartInitialWork();
@@ -193,6 +208,8 @@ namespace AdbDeviceVitals
         private async void StartInitialWork()
         {
             await RefreshSnapshot(true);
+            // 此时 RefreshSnapshot 已完成 SIM 识别并选定服务，静默刷新不会再串到上一家。
+            if (_broadnetAutoEnabled) _ = RefreshBroadnetSilentAsync();
             _pcHotspotChainPending = true;
             StartUsbTethering();
             RefreshPcHotspotStatus(true);
@@ -212,7 +229,7 @@ namespace AdbDeviceVitals
             menu.Items.Add("立即刷新", null, async delegate { await RefreshSnapshot(true); });
             menu.Items.Add("近期短信", null, delegate { OpenSmsWindow(); });
             menu.Items.Add("复制最新验证码", null, delegate { CopyLatestSmsCode(); });
-            menu.Items.Add("广电流量查询", null, delegate { _ = OpenBroadnetSafe(); });
+            menu.Items.Add("流量余量查询", null, delegate { _ = OpenBroadnetSafe(); });
             menu.Items.Add("打开日志目录", null, delegate { OpenLogDirectory(); });
             menu.Items.Add(new WF.ToolStripSeparator());
             menu.Items.Add("退出", null, delegate { RequestExit(); });
@@ -277,6 +294,7 @@ namespace AdbDeviceVitals
                 _broadnetTrafficWindow = null;
             }
             _broadnet.Shutdown();
+            _telecom.Shutdown();
             if (_tray != null)
             {
                 _tray.Visible = false;
@@ -297,6 +315,22 @@ namespace AdbDeviceVitals
             Shutdown();
         }
 
+        /// <summary>
+        /// 目标设备变了才读一次 SIM 识别运营商，避免每轮轮询都开 adb 进程。
+        /// 已有手动映射时跳过（手动优先），识别不到保持 None（卡片提示去设置）。
+        /// </summary>
+        private async Task EnsureAutoCarrierAsync()
+        {
+            if (AppSettings.CurrentCarrier != TrafficCarrier.None) return;
+            string serial = AppSettings.TargetDeviceSerial;
+            if (serial.Length == 0) return;
+            if (string.Equals(serial, _autoDetectedSerial, StringComparison.OrdinalIgnoreCase)) return;
+
+            _autoDetectedSerial = serial;
+            _carrierDetector.Invalidate(serial);
+            _autoDetectedCarrier = await _carrierDetector.DetectAsync(serial).ConfigureAwait(true);
+        }
+
         private async Task RefreshSnapshot(bool force)
         {
             if (_polling) return;
@@ -304,6 +338,16 @@ namespace AdbDeviceVitals
             try
             {
                 DeviceSnapshot snapshot = await _monitor.PollAsync(force);
+                // 运营商跟着目标设备走：手动映射优先；没配时按设备 SIM 的 PLMN 自动识别。
+                await EnsureAutoCarrierAsync();
+                // 设备变了也要重建上下文：两台同运营商的手机不能沿用上一台读数。
+                TrafficCarrier effective = EffectiveCarrier();
+                string serial = AppSettings.TargetDeviceSerial;
+                if (effective != _currentCarrier ||
+                    !string.Equals(serial, _trafficDeviceSerial, StringComparison.OrdinalIgnoreCase))
+                {
+                    SelectTrafficService();
+                }
                 UpdateUi(snapshot);
                 if (snapshot.Connected && DateTime.Now - _lastLog >= TimeSpan.FromSeconds(10))
                 {
@@ -330,6 +374,7 @@ namespace AdbDeviceVitals
             _lastSnapshot = s;
             _needsDeviceChoice = s.NeedsDeviceSelection;
             ConnectionStatus.Cursor = _needsDeviceChoice ? Cursors.Hand : Cursors.Arrow;
+            ApplySignalSource(s);
             if (!s.Connected)
             {
                 ConnectionStatus.Text = s.NeedsDeviceSelection
@@ -501,6 +546,58 @@ namespace AdbDeviceVitals
         }
 
         /// <summary>
+        /// 根据当前目标设备的运营商映射选用流量服务并重建用量存储。
+        /// 无映射时按广电兜底（老用户升级后不用重新设置），但卡片文案提示可去设置指定。
+        /// 切换运营商时重置卡片与已读缓存，避免显示上一家的数据。
+        /// </summary>
+        /// <summary>生效运营商：手动映射优先；没配则用设备 SIM 自动识别的结果。</summary>
+        private TrafficCarrier EffectiveCarrier()
+        {
+            TrafficCarrier manual = AppSettings.CurrentCarrier;
+            return manual != TrafficCarrier.None ? manual : _autoDetectedCarrier;
+        }
+
+        private void SelectTrafficService()
+        {
+            TrafficCarrier carrier = EffectiveCarrier();
+            _currentCarrier = carrier;
+            _trafficService = carrier == TrafficCarrier.Telecom
+                ? (ICarrierTrafficService)_telecom : _broadnet;
+            _trafficDeviceSerial = AppSettings.TargetDeviceSerial;
+            _usageStore = new BroadnetUsageStore(carrier);
+            _lastBroadnetTraffic = null;
+            _lastUsageAppendedAt = DateTime.MinValue;
+            _lastUsageAppendedKb = -1;
+            ApplyBroadnetPrompt();
+            if (_broadnetTrafficWindow != null && _broadnetTrafficWindow.IsVisible)
+                _broadnetTrafficWindow.Close();
+            _broadnetTrafficWindow = null;
+            _trafficWindowSerial = string.Empty;
+            _trafficWindowCarrier = TrafficCarrier.None;
+            _trafficService.Trace("service switched to " + CarrierMapping.CodeName(carrier)
+                + " serial=" + (string.IsNullOrEmpty(_trafficDeviceSerial) ? "auto" : _trafficDeviceSerial));
+        }
+
+        /// <summary>当前余量卡的运营商显示名（无映射时提示去设置）。</summary>
+        private string CarrierDisplayName()
+        {
+            return _currentCarrier == TrafficCarrier.None
+                ? "设置设备运营商后查询" : CarrierMapping.DisplayName(_currentCarrier);
+        }
+
+        /// <summary>
+        /// 异步读数回来后核对上下文：服务实例、运营商和目标设备都得还是发起时的那一个。
+        /// 设备切换/识别完成都可能导致上下文变化，旧读数必须丢弃，不能落到新卡上。
+        /// </summary>
+        private bool IsTrafficContextCurrent(ICarrierTrafficService service, TrafficCarrier carrier, string serial)
+        {
+            return !_shutdownDone
+                && ReferenceEquals(service, _trafficService)
+                && carrier == _currentCarrier
+                && string.Equals(serial, AppSettings.TargetDeviceSerial, StringComparison.OrdinalIgnoreCase);
+        }
+
+        /// <summary>
         /// 广电套餐余量入口。没有登录态时由服务弹出 WebView 让用户自己登录，
         /// 检测到登录后窗口自动关闭；拿到登录态后从营业厅当前页读文本。
         /// 这一步只做「能不能拿到登录态 + 页面原文」的闭环，解析与展示留到后续迭代。
@@ -542,30 +639,49 @@ namespace AdbDeviceVitals
 
         private async Task OpenBroadnetSafe()
         {
-            _broadnet.Trace("menu click -> OpenBroadnet");
+            _trafficService.Trace("menu click -> OpenBroadnet");
             try
             {
                 await OpenBroadnetAsync();
             }
             catch (Exception ex)
             {
-                _broadnet.Trace("OpenBroadnetAsync THREW: " + ex);
-                Notify("广电流量查询", "出错：" + ex.Message, WF.ToolTipIcon.Error);
+                _trafficService.Trace("OpenBroadnetAsync THREW: " + ex);
+                Notify(CarrierDisplayName() + "流量查询", "出错：" + ex.Message, WF.ToolTipIcon.Error);
             }
         }
 
         private async Task OpenBroadnetAsync()
         {
-            BroadnetTraffic traffic = await _broadnet.EnsureAndReadTrafficAsync();
-            if (!_broadnet.IsLoggedIn)
+            // 捕获发起时的上下文；WebView 人工登录可能持续很久，期间用户可能改设备/运营商。
+            ICarrierTrafficService service = _trafficService;
+            TrafficCarrier carrier = _currentCarrier;
+            string serial = AppSettings.TargetDeviceSerial;
+            BroadnetTraffic traffic = await service.EnsureAndReadTrafficAsync();
+            if (!IsTrafficContextCurrent(service, carrier, serial))
+            {
+                service.Trace("discard stale read after device/carrier switch");
+                return;
+            }
+            if (!service.IsLoggedIn)
             {
                 ApplyBroadnetPrompt();
-                Notify("广电流量查询", _broadnet.Status, WF.ToolTipIcon.Info);
+                Notify(CarrierDisplayName() + "流量查询", service.Status, WF.ToolTipIcon.Info);
+                return;
+            }
+            // 已登录但没解析出套餐（站点风控 / 令牌临期 / 页面改版）：别把「暂无余量」写进
+            // 卡片冲掉上次的有效读数，也别弹「没读到套餐余量」这种像是查询成功的通知。
+            if (traffic == null || traffic.Packages.Count == 0)
+            {
+                service.Trace("manual query: logged in but no packages, keep last card value");
+                Notify(CarrierDisplayName() + "流量查询",
+                    "登录有效，但暂时读不到套餐数据；可能是站点临时风控或页面改版，请稍后重试。",
+                    WF.ToolTipIcon.Warning);
                 return;
             }
             ApplyBroadnetTraffic(traffic);
             string summary = FormatBroadnetTraffic(traffic);
-            if (!string.IsNullOrEmpty(summary)) Notify("广电套餐余量", summary, WF.ToolTipIcon.Info);
+            if (!string.IsNullOrEmpty(summary)) Notify(CarrierDisplayName() + "套餐余量", summary, WF.ToolTipIcon.Info);
         }
 
         /// <summary>
@@ -575,30 +691,44 @@ namespace AdbDeviceVitals
         private async Task RefreshBroadnetSilentAsync()
         {
             if (_shutdownDone) return;
+            ICarrierTrafficService service = _trafficService;
+            TrafficCarrier carrier = _currentCarrier;
+            string serial = AppSettings.TargetDeviceSerial;
             try
             {
-                BroadnetTraffic traffic = await _broadnet.RefreshTrafficSilentlyAsync();
-                if (traffic != null)
+                BroadnetTraffic traffic = await service.RefreshTrafficSilentlyAsync();
+                if (!IsTrafficContextCurrent(service, carrier, serial))
+                {
+                    service.Trace("silent: discard stale result after device/carrier switch");
+                    return;
+                }
+                if (traffic != null && traffic.Packages.Count > 0)
                 {
                     ApplyBroadnetTraffic(traffic);
                 }
-                else if (_broadnet.LastAttemptExpired)
+                else if (traffic != null && traffic.Packages.Count == 0)
+                {
+                    // 风控/改版导致的 0 包：保留上次有效读数，不误清卡片，等下个周期。
+                    service.Trace("silent: no packages resolved, keep last card value");
+                }
+                else if (service.LastAttemptExpired)
                 {
                     ApplyBroadnetPrompt();
-                    _broadnet.Trace("silent refresh -> expired, card reset to prompt");
+                    service.Trace("silent refresh -> expired, card reset to prompt");
                 }
                 // 其它失败（网络抖动 / 超时）：保留卡片上的上次读数，等下一个周期。
             }
             catch (Exception ex)
             {
-                _broadnet.Trace("RefreshBroadnetSilentAsync THREW: " + ex);
+                service.Trace("RefreshBroadnetSilentAsync THREW: " + ex);
             }
         }
 
         /// <summary>登录态不可用时卡片回到初始提示，引导用户点击走人工登录。</summary>
         private void ApplyBroadnetPrompt()
         {
-            ApplyBroadnetCard("点击查询", "中国广电 · 点击登录查询");
+            UpdateBroadnetCarrierLabel();
+            ApplyBroadnetCard("点击查询", CarrierDisplayName() + " · 点击登录查询");
             BroadnetUsedValue.Text = string.Empty;
             _lastBroadnetTraffic = null;
             if (_broadnetTrafficWindow != null && _broadnetTrafficWindow.IsVisible)
@@ -611,12 +741,13 @@ namespace AdbDeviceVitals
             if (traffic == null)
             {
                 BroadnetRemainValue.Text = "读取失败";
-                BroadnetBalanceValue.Text = _broadnet.Status;
+                BroadnetBalanceValue.Text = _trafficService.Status;
                 BroadnetUsedValue.Text = string.Empty;
                 return;
             }
             _lastBroadnetTraffic = traffic;
             _broadnetCheckedAt = DateTime.Now;
+            UpdateBroadnetCarrierLabel();
             ApplyBroadnetCard(
                 BroadnetRemainSummary(traffic),
                 "话费 " + (string.IsNullOrEmpty(traffic.Balance) ? "—" : traffic.Balance + " 元"));
@@ -640,7 +771,7 @@ namespace AdbDeviceVitals
                 // 全算成那 10 分钟的用量，统计直接报废。
                 if (traffic.Packages.Count == 0 || traffic.MonthlyUsedKb <= 0)
                 {
-                    _broadnet.Trace("RecordUsageSample skipped: no valid packages / zero used");
+                    _trafficService.Trace("RecordUsageSample skipped: no valid packages / zero used");
                     return;
                 }
                 DateTime now = DateTime.Now;
@@ -659,7 +790,7 @@ namespace AdbDeviceVitals
             }
             catch (Exception ex)
             {
-                _broadnet.Trace("RecordUsageSample THREW: " + ex.Message);
+                _trafficService.Trace("RecordUsageSample THREW: " + ex.Message);
             }
         }
 
@@ -667,6 +798,10 @@ namespace AdbDeviceVitals
         private void ApplyTrafficWindow(BroadnetTraffic traffic)
         {
             if (_broadnetTrafficWindow == null) return;
+            // 详情窗是在某个设备/运营商下打开的；上下文变了就不往旧窗里填新数据。
+            if (_trafficWindowCarrier != _currentCarrier ||
+                !string.Equals(_trafficWindowSerial, AppSettings.TargetDeviceSerial, StringComparison.OrdinalIgnoreCase))
+                return;
             _broadnetTrafficWindow.Apply(traffic, BuildUsageStats());
         }
 
@@ -713,11 +848,18 @@ namespace AdbDeviceVitals
             BroadnetBalanceValue.Text = balance;
         }
 
+        /// <summary>卡片左上角标出读数归属的运营商，防止和当前设置错位时用户看不出来。</summary>
+        private void UpdateBroadnetCarrierLabel()
+        {
+            BroadnetCarrierValue.Text = _currentCarrier == TrafficCarrier.None
+                ? string.Empty : "· " + CarrierMapping.DisplayName(_currentCarrier);
+        }
+
         /// <summary>把套餐余量拼成气泡可读摘要：只留有剩余的包 + 话费，避免文本过长。</summary>
         private static string FormatBroadnetTraffic(BroadnetTraffic traffic)
         {
             if (traffic == null || traffic.Packages.Count == 0)
-                return "已登录，但没读到套餐余量；请确认能打开个人中心页。";
+                return "已登录，但暂时读不到套餐数据；可能是站点临时风控或页面改版，请稍后重试。";
 
             System.Text.StringBuilder sb = new System.Text.StringBuilder();
             if (!string.IsNullOrEmpty(traffic.MonthlyUsed))
@@ -853,8 +995,16 @@ namespace AdbDeviceVitals
             }
             _broadnetTrafficWindow = new BroadnetTrafficWindow(
                 delegate { _ = OpenBroadnetSafe(); });
+            _trafficWindowSerial = AppSettings.TargetDeviceSerial;
+            _trafficWindowCarrier = _currentCarrier;
+            _broadnetTrafficWindow.SetCarrier(CarrierDisplayName());
             if (IsVisible) _broadnetTrafficWindow.Owner = this;
-            _broadnetTrafficWindow.Closed += delegate { _broadnetTrafficWindow = null; };
+            _broadnetTrafficWindow.Closed += delegate
+            {
+                _broadnetTrafficWindow = null;
+                _trafficWindowSerial = string.Empty;
+                _trafficWindowCarrier = TrafficCarrier.None;
+            };
             _broadnetTrafficWindow.Show();
             if (_lastBroadnetTraffic != null) ApplyTrafficWindow(_lastBroadnetTraffic);
         }
@@ -901,6 +1051,13 @@ namespace AdbDeviceVitals
                 _networkDetailsWindow.Apply(_lastSnapshot, _publicIpv4, _publicIpv6, _publicIpCheckedAt);
             if (_batteryDetailsWindow != null && _batteryDetailsWindow.IsVisible)
                 _batteryDetailsWindow.Apply(_lastSnapshot);
+        }
+
+        /// <summary>信号格数默认指当前跑流量的那张卡；定位不到数据卡时不乱标。</summary>
+        private void ApplySignalSource(DeviceSnapshot s)
+        {
+            SignalSourceText.Text = s != null && s.Connected && s.SignalPhoneId.HasValue
+                ? "· 流量卡信号" : string.Empty;
         }
 
         private void ApplySignal(SignalVerdict verdict)
@@ -1270,6 +1427,8 @@ namespace AdbDeviceVitals
             if (smsBefore && !AppSettings.SmsSyncEnabled) _smsErrorNotified = false;
             RefreshSmsPreview();
             _adb.ReloadPath();
+            _carrierDetector.Invalidate(null); // 设置里可能换了设备/运营商，下轮重新识别
+            _autoDetectedSerial = string.Empty;
             StartUsbTethering();
             if (AppSettings.AutoStartPcHotspot) StartPcHotspot();
             await RefreshSnapshot(true);

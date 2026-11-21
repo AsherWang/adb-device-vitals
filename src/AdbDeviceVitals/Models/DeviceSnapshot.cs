@@ -34,6 +34,12 @@ namespace AdbDeviceVitals.Models
         public int? SinrDb { get; set; }
         public int? SignalLevel { get; set; }
 
+        /// <summary>当前活跃数据卡的 subId；信号读数应来自它对应的 phoneId。</summary>
+        public int? ActiveDataSubId { get; set; }
+
+        /// <summary>本次信号读数实际来自哪个 phoneId（双卡时避免误读另一张卡）。</summary>
+        public int? SignalPhoneId { get; set; }
+
         public bool HotspotActive { get; set; }
         public int ConnectedClients { get; set; }
         public int? HotspotFrequencyMhz { get; set; }

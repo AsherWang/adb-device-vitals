@@ -15,6 +15,7 @@ internal static class ParserTests
     {
         Battery();
         Telephony();
+        DualSimSignal();
         Hotspot();
         UsbTethering();
         NetworkStats();
@@ -26,6 +27,8 @@ internal static class ParserTests
         Updates();
         LogRobustness();
         BroadnetUsageTests();
+        CarrierMappingTests();
+        TelecomTrafficTests();
         Console.WriteLine(_failed == 0 ? "All parser tests passed." : _failed + " parser test(s) failed.");
         return _failed == 0 ? 0 : 1;
     }
@@ -50,6 +53,31 @@ internal static class ParserTests
         Equal(-11, value.RsrqDb, "NR RSRQ");
         Equal(18, value.SinrDb, "NR SINR");
         Equal(5, value.SignalLevel, "signal level");
+    }
+
+    private static void DualSimSignal()
+    {
+        string sample =
+            "  Phone Id=0\n" +
+            "    mSignalStrength=SignalStrength:{mLte=CellSignalStrengthLte: rssi=-69 rsrp=-104 rsrq=-10 rssnr=4 level=3,mNr=CellSignalStrengthNr:{ ssRsrp = 2147483647 ssRsrq = 2147483647 ssSinr = 2147483647 level = 0 },primary=CellSignalStrengthLte}\n" +
+            "  Phone Id=1\n" +
+            "    mSignalStrength=SignalStrength:{mLte=CellSignalStrengthLte: rssi=2147483647 rsrp=2147483647 rsrq=2147483647 rssnr=2147483647 level=0,mNr=CellSignalStrengthNr:{ ssRsrp = -82 ssRsrq = -11 ssSinr = 28 level = 2 },primary=CellSignalStrengthNr}\n" +
+            "  mActiveDataSubId=7\n" +
+            "local logs:\n" +
+            "  2026-11-21T22:00:00.000000 - notifyServiceStateForSubscriber: subId=7 phoneId=1 state={}\n";
+
+        Equal(7, AdbParsers.ParseActiveDataSubId(sample), "active data subId");
+        Equal(1, AdbParsers.ParseActiveDataPhoneId(sample), "active data phoneId");
+
+        DeviceSnapshot value = new DeviceSnapshot();
+        value.NetworkType = "LTE"; // getprop 首段是 LTE，不能覆盖数据卡的 NR
+        AdbParsers.ParseTelephony(sample, value, AdbParsers.ParseActiveDataPhoneId(sample));
+        Equal(-82, value.RsrpDbm, "data card NR RSRP");
+        Equal(-11, value.RsrqDb, "data card NR RSRQ");
+        Equal(28, value.SinrDb, "data card NR SINR");
+        Equal(2, value.SignalLevel, "data card signal level");
+        Equal("NR", value.NetworkType, "data card network type");
+        Equal(1, value.SignalPhoneId, "signal source phoneId");
     }
 
     private static void Hotspot()
@@ -552,6 +580,136 @@ internal static class ParserTests
                 UsedKb = (double)packages[i + 1]
             });
         return sample;
+    }
+
+    private static void CarrierMappingTests()
+    {
+        string serialA = "ABC123DEF456";
+        string serialB = "XYZ789";
+        string map = CarrierMapping.Set(string.Empty, serialA, TrafficCarrier.Broadnet);
+        map = CarrierMapping.Set(map, serialB, TrafficCarrier.Telecom);
+        Equal(TrafficCarrier.Broadnet, CarrierMapping.Get(map, serialA), "carrier map broadnet");
+        Equal(TrafficCarrier.Telecom, CarrierMapping.Get(map, serialB), "carrier map telecom");
+        Equal(TrafficCarrier.None, CarrierMapping.Get(map, "UNKNOWN"), "carrier map missing");
+
+        // 改一个不影响另一个；删一个后另一个还在。
+        map = CarrierMapping.Set(map, serialA, TrafficCarrier.Telecom);
+        Equal(TrafficCarrier.Telecom, CarrierMapping.Get(map, serialA), "carrier map update");
+        Equal(TrafficCarrier.Telecom, CarrierMapping.Get(map, serialB), "carrier map unaffected");
+        map = CarrierMapping.Set(map, serialA, TrafficCarrier.None);
+        Equal(TrafficCarrier.None, CarrierMapping.Get(map, serialA), "carrier map remove");
+        Equal(TrafficCarrier.Telecom, CarrierMapping.Get(map, serialB), "carrier map keep other");
+
+        // 穿过 settings.json 的编解码往返。
+        SettingsData data = new SettingsData { CarrierByDevice = map };
+        SettingsData round = SettingsFile.Parse(SettingsFile.Serialize(data));
+        Equal(map, round.CarrierByDevice, "carrier map json roundtrip");
+
+        // SIM PLMN 自动识别：双卡取第一段，未知/空返回 None。
+        Equal(TrafficCarrier.Telecom, CarrierMapping.FromPlmn("46011,46011"), "plmn dual-sim telecom");
+        Equal(TrafficCarrier.Broadnet, CarrierMapping.FromPlmn("46015"), "plmn broadnet");
+        Equal(TrafficCarrier.Telecom, CarrierMapping.FromPlmn("46000,46011"), "plmn skip unsupported first");
+        Equal(TrafficCarrier.None, CarrierMapping.FromPlmn("46000,46001"), "plmn unsupported carriers");
+        Equal(TrafficCarrier.None, CarrierMapping.FromPlmn(""), "plmn empty");
+        Equal(TrafficCarrier.None, CarrierMapping.FromPlmn(null), "plmn null");
+
+        // 双卡按活跃数据卡识别：subId→slot→该槽 PLMN。
+        Equal("46015", CarrierMapping.PlmnAtSlot("46001,46015", 1), "plmn at slot 1");
+        Equal("46001", CarrierMapping.PlmnAtSlot("46001,46015", 0), "plmn at slot 0");
+        Equal("46011", CarrierMapping.PlmnAtSlot("46011", 1), "plmn at slot out of range falls back");
+
+        int slot;
+        // 实测日志格式：subId 1 在 slot 1。
+        Equal(true, CarrierMapping.TryGetDataSlot(
+            "subId changed for slot: 1, -1 -> 1", 1, out slot), "subId slot parse hit");
+        Equal(1, slot, "subId slot value");
+        // 两次变更取最后一次：subId 1 先 slot0 后 slot1。
+        Equal(true, CarrierMapping.TryGetDataSlot(
+            "subId changed for slot: 0, -1 -> 1\nsubId changed for slot: 1, -1 -> 1", 1, out slot),
+            "subId slot parse last wins");
+        Equal(1, slot, "subId slot last value");
+        // 找的是目标 subId：dataSubId=2 时忽略 subId=1 的记录。
+        Equal(true, CarrierMapping.TryGetDataSlot(
+            "subId changed for slot: 1, -1 -> 1\nsubId changed for slot: 0, -1 -> 2", 2, out slot),
+            "subId slot match target");
+        Equal(0, slot, "subId slot target value");
+        Equal(false, CarrierMapping.TryGetDataSlot(
+            "subId changed for slot: 0, -1 -> 1", 2, out slot), "subId slot no match");
+        Equal(false, CarrierMapping.TryGetDataSlot("garbage", 1, out slot), "subId slot garbage");
+
+        // 端到端：联通在 slot0、广电在 slot1，数据卡 subId=1→slot1，应识别为广电而非第一段联通。
+        string mixed = "46001,46015";
+        Equal(true, CarrierMapping.TryGetDataSlot("subId changed for slot: 1, -1 -> 1", 1, out slot),
+            "mixed sim slot parse");
+        Equal(TrafficCarrier.Broadnet, CarrierMapping.FromPlmn(CarrierMapping.PlmnAtSlot(mixed, slot)),
+            "mixed sim picks data slot carrier");
+        // 回退路径仍取第一段支持的卡。
+        Equal(TrafficCarrier.Broadnet, CarrierMapping.FromPlmn(mixed), "mixed sim fallback first supported");
+    }
+
+    private static void TelecomTrafficTests()
+    {
+        // 单位换算：KB 原样、MB×1024、GB×1048576、无单位按 G。
+        Near(512, TelecomTrafficParser.UnitToKb("512KB"), "telecom unit KB");
+        Near(2048, TelecomTrafficParser.UnitToKb("2MB"), "telecom unit MB");
+        Near(138.85 * 1048576, TelecomTrafficParser.UnitToKb("138.85GB"), "telecom unit GB");
+        Near(5 * 1048576, TelecomTrafficParser.UnitToKb("5"), "telecom unit default G");
+
+        // 实测响应结构：通用 + 专用两类，各带 used/remaining。
+        string usage = "{\"code\":\"S_COMMON_0000\",\"data\":{"
+            + "\"remainingGeneralData\":\"138.85GB\",\"usedGeneralData\":\"16.15GB\","
+            + "\"remainingDedicatedData\":\"4.52GB\",\"usedDedicatedData\":\"26.80GB\"}}";
+        string balance = "{\"code\":\"S_COMMON_0000\",\"data\":{\"mobileBalance\":\"57.09\"}}";
+        BroadnetTraffic traffic = TelecomTrafficParser.ParseUsage(usage, balance);
+        if (traffic == null)
+        {
+            Console.Error.WriteLine("FAIL telecom parse: null result");
+            _failed++;
+            return;
+        }
+        Equal(2, traffic.Packages.Count, "telecom package count");
+        Equal("通用流量", traffic.Packages[0].Name, "telecom package 0 name");
+        Equal("专用流量", traffic.Packages[1].Name, "telecom package 1 name");
+        Near(16.15 * 1048576, traffic.Packages[0].UsedKb, "telecom general used kb");
+        Near(138.85 * 1048576, traffic.Packages[0].RemainKb, "telecom general remain kb");
+        Near((16.15 + 26.80) * 1048576, traffic.MonthlyUsedKb, "telecom monthly used kb");
+        Equal("57.09", traffic.Balance, "telecom balance");
+        Equal("42.95", TrafficFormatG(traffic.MonthlyUsedKb), "telecom monthly used display");
+
+        // 只有一类流量时也能解析（省级账号可能没有专用包）。
+        string onePackage = "{\"data\":{\"remainingGeneralData\":\"10GB\",\"usedGeneralData\":\"2GB\","
+            + "\"remainingDedicatedData\":\"0.00KB\",\"usedDedicatedData\":\"0.00KB\"}}";
+        BroadnetTraffic single = TelecomTrafficParser.ParseUsage(onePackage, null);
+        if (single == null || single.Packages.Count != 1)
+        {
+            Console.Error.WriteLine("FAIL telecom single package");
+            _failed++;
+        }
+
+        // 站点风控 / 令牌临期时接口 URL 不变但响应变成异常内容（实测两种接口都是 574B）。
+        // 这类 body 必须解析失败，否则 HasValidTrafficData 会把坏响应当成有效登录态。
+        string[] badBodies = new string[]
+        {
+            "{\"code\":\"S_COMMON_9999\",\"msg\":\"系统繁忙\",\"data\":null}",
+            "<html><body>access denied</body></html>",
+            "{\"data\":{\"remainingGeneralData\":\"0.00KB\",\"usedGeneralData\":\"0.00KB\","
+                + "\"remainingDedicatedData\":\"0.00KB\",\"usedDedicatedData\":\"0.00KB\"}}",
+            string.Empty
+        };
+        foreach (string bad in badBodies)
+        {
+            BroadnetTraffic parsed = TelecomTrafficParser.ParseUsage(bad, bad);
+            if (parsed != null && parsed.Packages.Count > 0)
+            {
+                Console.Error.WriteLine("FAIL telecom bad response parsed as valid: " + bad);
+                _failed++;
+            }
+        }
+    }
+
+    private static string TrafficFormatG(double kb)
+    {
+        return (kb / 1048576.0).ToString("0.##", CultureInfo.InvariantCulture);
     }
 
     private static void Near(double expected, double actual, string name)

@@ -15,12 +15,12 @@
             <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
 
-        <ui:TitleBar Grid.Row="0" Title="广电套餐余量" />
+        <ui:TitleBar Grid.Row="0" x:Name="WindowTitle" Title="套餐余量" />
 
         <ScrollViewer Grid.Row="1" Margin="20,6,20,8" VerticalScrollBarVisibility="Auto">
             <StackPanel>
                 <TextBlock x:Name="SummaryText" FontSize="12" Opacity="0.62" TextWrapping="Wrap" Margin="4,0,18,10"
-                           Text="点「刷新」从中国广电营业厅读取；首次使用会弹出窗口让你自己登录。" />
+                           Text="点「刷新」从营业厅读取；首次使用会弹出窗口让你自己登录。" />
 
                 <ui:Card Margin="0,0,0,8" Padding="14,10">
                     <Grid>

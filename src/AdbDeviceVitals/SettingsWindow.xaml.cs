@@ -20,7 +20,10 @@ namespace AdbDeviceVitals
         private static readonly Brush Warning = MakeBrush(0xB0, 0x48, 0x1C);
 
         private readonly AdbClient _adb;
+        private readonly CarrierDetector _carrierDetector;
         private readonly Func<Task> _checkForUpdates;
+        private readonly Dictionary<string, TrafficCarrier> _detectedCarriers =
+            new Dictionary<string, TrafficCarrier>(StringComparer.OrdinalIgnoreCase);
         private bool _loadingDevices;
         private bool _suppressChoiceEvents;
         private int _authorizedCount;
@@ -30,6 +33,7 @@ namespace AdbDeviceVitals
         {
             InitializeComponent();
             _adb = adb;
+            _carrierDetector = new CarrierDetector(adb);
             _checkForUpdates = checkForUpdates;
 
             AdbDirectoryBox.Text = AppSettings.AdbDirectory;
@@ -54,6 +58,7 @@ namespace AdbDeviceVitals
             TargetDeviceBox.SelectedIndex = 0;
             _suppressChoiceEvents = false;
             UpdateDeviceHint();
+            UpdateCarrierChoice();
         }
 
         private async void Window_Loaded(object sender, RoutedEventArgs e)
@@ -93,12 +98,32 @@ namespace AdbDeviceVitals
                 {
                     error = ex.Message;
                 }
+
+                // 顺带从 SIM 的 PLMN 自动识别每台设备的运营商（读不到不影响手选）。
+                _detectedCarriers.Clear();
+                List<Task> probes = new List<Task>();
+                foreach (AdbDevice device in devices)
+                {
+                    if (!DeviceSelection.IsAuthorized(device)) continue;
+                    probes.Add(ProbeCarrierAsync(device.Serial));
+                }
+                await Task.WhenAll(probes).ConfigureAwait(true);
+
                 FillDeviceChoices(devices, error);
             }
             finally
             {
                 RefreshDevicesButton.IsEnabled = true;
                 _loadingDevices = false;
+            }
+        }
+
+        private async Task ProbeCarrierAsync(string serial)
+        {
+            TrafficCarrier detected = await _carrierDetector.DetectAsync(serial).ConfigureAwait(true);
+            lock (_detectedCarriers)
+            {
+                _detectedCarriers[serial] = detected;
             }
         }
 
@@ -141,11 +166,58 @@ namespace AdbDeviceVitals
             _suppressChoiceEvents = false;
             DeviceHintText.Tag = error;
             UpdateDeviceHint();
+            // SelectedIndex 可能被 suppress 屏蔽或选中项没变，显式刷一次运营商下拉，
+            // 否则刚识别出的运营商不会预填进去。
+            UpdateCarrierChoice();
         }
 
         private void TargetDeviceBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
         {
-            if (!_suppressChoiceEvents) UpdateDeviceHint();
+            if (_suppressChoiceEvents) return;
+            UpdateDeviceHint();
+            UpdateCarrierChoice();
+        }
+
+        /// <summary>运营商下拉跟着当前选中的设备走；已手动配置优先，否则用 SIM 自动识别的结果。</summary>
+        private void UpdateCarrierChoice()
+        {
+            DeviceChoice choice = TargetDeviceBox.SelectedItem as DeviceChoice;
+            string serial = choice == null ? string.Empty : choice.Serial;
+            TrafficCarrier manual = serial.Length == 0
+                ? TrafficCarrier.None
+                : CarrierMapping.Get(AppSettings.CarrierByDevice, serial);
+            TrafficCarrier detected = TrafficCarrier.None;
+            bool autoDetected = false;
+            if (serial.Length > 0 && manual == TrafficCarrier.None)
+            {
+                lock (_detectedCarriers)
+                    _detectedCarriers.TryGetValue(serial, out detected);
+                autoDetected = detected != TrafficCarrier.None;
+            }
+            _suppressChoiceEvents = true;
+            DeviceCarrierBox.SelectedIndex = (int)(autoDetected ? detected : manual);
+            _suppressChoiceEvents = false;
+            if (CarrierHintText != null)
+            {
+                if (serial.Length == 0)
+                    CarrierHintText.Text = "自动选择模式下无法指定运营商；请先在上方选定一台设备。";
+                else if (autoDetected)
+                    CarrierHintText.Text = "已从 SIM 卡自动识别为「" + CarrierMapping.DisplayName(detected)
+                        + "」；可手动修改，保存后生效。识别不到时可在此手动指定。";
+                else
+                    CarrierHintText.Text = "未从 SIM 卡识别到支持的运营商；请手动指定。留「不查询」则该设备不显示流量卡。";
+            }
+        }
+
+        private void DeviceCarrierBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+        {
+            if (_suppressChoiceEvents || CarrierHintText == null) return;
+            DeviceChoice choice = TargetDeviceBox.SelectedItem as DeviceChoice;
+            if (choice == null || choice.Serial.Length == 0) return;
+            TrafficCarrier selected = (TrafficCarrier)DeviceCarrierBox.SelectedIndex;
+            CarrierHintText.Text = selected == TrafficCarrier.None
+                ? "这台手机不显示流量余量卡。"
+                : "保存后，选中这台手机时主界面余量卡会显示「" + CarrierMapping.DisplayName(selected) + "」的数据。";
         }
 
         private void UpdateDeviceHint()
@@ -255,6 +327,10 @@ namespace AdbDeviceVitals
                 {
                     AdbDirectory = directory,
                     TargetDeviceSerial = serial,
+                    CarrierByDevice = serial.Length == 0
+                        ? AppSettings.CarrierByDevice
+                        : CarrierMapping.Set(AppSettings.CarrierByDevice, serial,
+                            (TrafficCarrier)DeviceCarrierBox.SelectedIndex),
                     AutoEnableUsbTethering = AutoEnableUsbTetheringSwitch.IsChecked == true,
                     AutoRecoverUsbTethering = AutoRecoverUsbTetheringSwitch.IsChecked == true,
                     AutoStartPcHotspot = AutoStartPcHotspotSwitch.IsChecked == true,

@@ -68,6 +68,7 @@
                             <RowDefinition Height="Auto" />
                             <RowDefinition Height="Auto" />
                             <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
                         </Grid.RowDefinitions>
                         <TextBlock Grid.Row="0" Grid.Column="0" Grid.ColumnSpan="2" Text="蜂窝链路"
                                    FontSize="14" FontWeight="SemiBold" Margin="0,0,0,10" />
@@ -83,6 +84,8 @@
                         <TextBlock Grid.Row="5" Grid.Column="1" x:Name="SinrText" Text="—" Style="{StaticResource ValueText}" />
                         <TextBlock Grid.Row="6" Grid.Column="0" Text="系统信号等级" Style="{StaticResource LabelText}" />
                         <TextBlock Grid.Row="6" Grid.Column="1" x:Name="SignalLevelText" Text="—" Style="{StaticResource ValueText}" />
+                        <TextBlock Grid.Row="7" Grid.Column="0" Text="信号来源" Style="{StaticResource LabelText}" />
+                        <TextBlock Grid.Row="7" Grid.Column="1" x:Name="SignalSourceText" Text="—" Style="{StaticResource ValueText}" />
                     </Grid>
                 </ui:Card>
 

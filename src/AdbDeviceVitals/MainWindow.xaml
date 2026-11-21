@@ -48,8 +48,11 @@
                              HorizontalContentAlignment="Stretch" VerticalContentAlignment="Stretch"
                              MouseEnter="NetworkCard_MouseEnter" MouseLeave="NetworkCard_MouseLeave">
                         <Grid>
-                            <StackPanel Margin="10" HorizontalAlignment="Stretch" VerticalAlignment="Top">
+                            <StackPanel Margin="10" HorizontalAlignment="Stretch" VerticalAlignment="Top"
+                                        Orientation="Horizontal">
                                 <TextBlock Text="蜂窝网络" FontSize="12" Opacity="0.62" />
+                                <TextBlock x:Name="SignalSourceText" Text="" FontSize="12" Opacity="0.62"
+                                           Margin="6,0,0,0" TextTrimming="CharacterEllipsis" />
                             </StackPanel>
                             <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
                                 <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
@@ -92,13 +95,16 @@
                              Cursor="Hand" MouseLeftButtonUp="BroadnetCard_Click"
                              MouseEnter="BroadnetCard_MouseEnter" MouseLeave="BroadnetCard_MouseLeave">
                         <Grid>
-                            <StackPanel Margin="10" HorizontalAlignment="Stretch" VerticalAlignment="Top">
+                            <StackPanel Margin="10" HorizontalAlignment="Stretch" VerticalAlignment="Top"
+                                        Orientation="Horizontal">
                                 <TextBlock Text="剩余流量" FontSize="12" Opacity="0.62" />
+                                <TextBlock x:Name="BroadnetCarrierValue" Text="" FontSize="12" Opacity="0.62"
+                                           Margin="6,0,0,0" TextTrimming="CharacterEllipsis" />
                             </StackPanel>
                             <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
                                 <TextBlock x:Name="BroadnetRemainValue" Text="点击查询" FontSize="23" FontWeight="SemiBold"
                                            HorizontalAlignment="Center" TextTrimming="CharacterEllipsis" />
-                                <TextBlock x:Name="BroadnetBalanceValue" Text="中国广电 · 套餐余量" FontSize="13" Opacity="0.72"
+                                <TextBlock x:Name="BroadnetBalanceValue" Text="设置设备运营商后查询" FontSize="13" Opacity="0.72"
                                            HorizontalAlignment="Center" Margin="0,4,0,0"
                                            TextTrimming="CharacterEllipsis" />
                                 <TextBlock x:Name="BroadnetUsedValue" Text="" FontSize="12" Opacity="0.62"

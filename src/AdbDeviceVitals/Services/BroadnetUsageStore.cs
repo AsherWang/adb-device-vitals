@@ -32,6 +32,15 @@ namespace AdbDeviceVitals.Services
         public BroadnetUsageStore()
             : this(Path.Combine(AppSettings.ConfigDirectory, "usage")) { }
 
+        /// <summary>
+        /// 按运营商隔离用量数据。广电沿用原 usage/ 目录（保留历史采样），
+        /// 其他运营商用 usage/{code}/ 子目录，避免两家数据混在一起。
+        /// </summary>
+        public BroadnetUsageStore(TrafficCarrier carrier)
+            : this(carrier == TrafficCarrier.Broadnet
+                ? Path.Combine(AppSettings.ConfigDirectory, "usage")
+                : Path.Combine(AppSettings.ConfigDirectory, "usage", CarrierMapping.CodeName(carrier))) { }
+
         /// <summary>测试可注入临时目录。</summary>
         public BroadnetUsageStore(string directory)
         {

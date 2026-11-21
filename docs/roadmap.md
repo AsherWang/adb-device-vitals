@@ -1,8 +1,54 @@
-# 后续计划
+# Roadmap
 
-> 下面各项代码均已实现。保留这些文字作为设计依据和排障参考，不再是待办清单。
+> 各项代码均已落地。保留这些文字作为设计依据和排障记录。（原「后续计划」与待办项已合并于此。）
 
-## 开机自启动
+## 已实现
+
+### 双卡设备：按活跃数据卡识别流量运营商
+
+**状态**：已实现（2026-11-21；保留本节作为设计依据与实测记录）
+
+**背景**
+
+设置页与主界面的运营商自动识别走 `adb shell getprop gsm.sim.operator.numeric`，取第一段有效 PLMN 定运营商（46011=电信、46015=广电）。双卡时这个返回值是逗号分隔的两段，对应两张卡。
+
+简化方案取"第一段有效的支持运营商"，在以下场景会识别错：
+
+- 数据卡是 A 网、但第一段是 B 网（如 slot0 联通 46001、slot1 广电 46015，实际走联通流量，却识别成广电）。
+- 两张卡同网（如当前这台 NX789J 是 `46011,46011`）时无影响。
+
+**目标**
+
+双卡不同网时，按"当前实际跑流量的那张卡"识别运营商，而不是取第一段。
+
+**已验证可行的 ADB 链路**（2026-11-21 在 NX789J 上实测）
+
+| 步骤 | 命令 / 字段 | 实测值 | 说明 |
+|---|---|---|---|
+| 1 | `settings get global multi_sim_data_call` | `1` | 默认数据 subId，轻量 |
+| 1' | `dumpsys phone` → `mDefaultDataSubId` | `1` | 同上，更权威 |
+| 1'' | `dumpsys telephony.registry` → `mActiveDataSubId` | `1` | 当前真正在跑数据的 subId，最准 |
+| 2 | `dumpsys phone` 日志 → `subId changed for slot: 1, -1 -> 1` | subId 1 ↔ slot 1 | subId→slot 映射；不同 ROM 规则可能不同，不能写死 |
+| 3 | 该 slot 的 PLMN（`46011`/`46015`） | 46011 | 定运营商 |
+
+注意 `mDefaultPhoneId`（实测 0）与 `mActiveDataSubId`（实测 1）编号体系不同，不要混用；以 subId 为准。
+
+**实际实现**（与上面调研链路的差异以本节为准）
+
+- `CarrierDetector.DetectAsync`：仅当 `gsm.sim.operator.numeric` 含逗号（双卡）才走精确路径，单卡直接取第一段、零额外开销。
+- 精确路径：`settings get global multi_sim_data_call` 拿数据卡 subId → `dumpsys phone` 用正则 `subId changed for slot: (\d+), -\d+ -> (\d+)` 找该 subId 对应的卡槽（多次变更取最后一次）→ 取 `numeric` 第 N 段 → `FromPlmn`。
+- 没采用 `mActiveDataSubId`：它在 `dumpsys telephony.registry` 里，输出更大更慢；`settings` + `dumpsys phone`（约 40KB）已足够，且 `multi_sim_data_call` 实测与 `mActiveDataSubId` 同为 1。
+- 解析失败（读不到 subId / 匹配不到 slot / 越界）一律回退到"取第一段支持的 PLMN"，不阻断识别。
+- `dumpsys` 只在双卡且缓存未命中时读一次，沿用按 serial 缓存；换卡/换设备时 `Invalidate` 清缓存。
+- 单卡快路径完全不受影响：广电机 `46015` 直接识别，不读 `dumpsys`。
+
+**验证**
+
+- ParserTests 覆盖：`PlmnAtSlot`（含越界回退）、`TryGetDataSlot`（命中/多次取最后/匹配目标 subId/无匹配/垃圾输入）、混合双卡端到端（slot0 联通 + slot1 广电，数据卡在 slot1 → 识别为广电）。
+- 真实设备端到端：电信双卡机（46011,46011 / subId 1 → slot 1 → 46011）识别为电信；广电单卡机（46015）识别为广电。
+- 主项目 + 两测试项目编译通过，逻辑测试全绿，渲染 9 图全绿。
+
+### 开机自启动
 
 在设置里增加「开机自启动」开关，默认关闭。
 
@@ -13,7 +59,7 @@
 
 开关与现有 ADB 目录一起保存在 `~/adb-device-vitals/settings.json`，详见文末「实现说明：配置文件」。
 
-## 启动后自动开启 USB 网络共享
+### 启动后自动开启 USB 网络共享
 
 程序启动后（含开机自启动和手动启动）自动查找设备，并在 USB 网络共享未开启时尝试打开。该行为单独做成设置项，默认关闭，避免未经选择就改手机的 USB 模式。
 
@@ -34,7 +80,7 @@
 
 已开启时不做开关切换。主窗口早期有「USB 共享」手动开关（`svc usb setFunctions mtp`），后来按界面精简需求移除；关闭共享现在由用户在手机系统设置里操作，不属于本程序的自动流程。服务层 `SetEnabledAsync(false, ...)` 仍保留，但当前 UI 没有调用它的入口。
 
-## 实现说明：USB 功能组合保持 `rndis`
+### 实现说明：USB 功能组合保持 `rndis`
 
 上一节流程的第 3 步，实际实现为 `svc usb setFunctions rndis`，不显式带 adb。**这个差异是有意保留的，现状不做改动。**
 
@@ -45,7 +91,7 @@
 - 这个做法依赖 ROM 行为，不是协议保证。若某机型严格按 AOSP 语义只保留 `rndis`，切换后 ADB 会掉线：`ConfirmAsync` 等不到设备重新上线，会把已经成功的切换报成「USB 功能已切换，但网络共享未进入 TetheredState」，界面上也无法再用 `setFunctions mtp` 关闭共享，只能到手机上操作。遇到这种机型时，再把 `EnableFunctionCommand` 改回 `svc usb setFunctions rndis,adb`。
 - 另外，`setFunctions` 只改运行时组合，不写入 `persist.sys.usb.config`。拔插数据线或重启手机后，USB 功能回到系统持久化的组合（通常只含 adb 或 `mtp,adb`），共享不会自动恢复，因此"切完靠 USB 重枚举再连回来"并不成立，不能当作恢复手段。
 
-## 启动后自动开启电脑热点
+### 启动后自动开启电脑热点
 
 把已经进到电脑里的手机网络，再用 Wi-Fi 分给其他设备。设置项 `AutoStartPcHotspot` 默认关闭，与 ADB 目录一起保存在 `settings.json`。
 
@@ -69,7 +115,7 @@
 
 热点由 Windows 的 ICS 服务提供，客户端会拿到 `192.168.137.x` 的地址。程序退出不会关闭热点。
 
-## 实现说明：多设备下的目标设备
+### 实现说明：多设备下的目标设备
 
 同时连接多台 Android 设备时，原来的 `FirstAuthorized(devices)`（取列表第一台已授权设备）会埋一个隐患：状态卡片看着 A 手机，USB 共享的自动操作却可能切到 B 手机，而 `setFunctions` 改的是那台手机的 USB 功能组合。因此改为统一由 `Services/DeviceSelection.cs` 的纯函数 `Resolve(devices, preferredSerial)` 决定目标，**监控采集（`DeviceMonitor`）和共享服务（`UsbTetheringService`）都调用它**，保证两处看到的是同一台设备。
 
@@ -96,7 +142,7 @@
 
 `ConfirmAsync` 仍按命令下发时的序列号判断设备是否重新上线，切换 USB 功能后即使旁边还有别的手机在线，也不会把确认结果算到它们头上。
 
-## 实现说明：配置文件
+### 实现说明：配置文件
 
 配置不再放 `HKCU\Software\AdbDeviceVitals`，改为 `~/adb-device-vitals/settings.json`（通过 `Environment.SpecialFolder.UserProfile` 解析，不是 exe 所在目录）。字段沿用旧注册表值名，迁移时无需映射：`AdbDirectory`、`TargetDeviceSerial`、`RunAtStartup`、`AutoEnableUsbTethering`、`AutoStartPcHotspot`、`LastUpdateCheckUtc`，外加一个 `schema` 版本号。后来新增的 `AutoRecoverUsbTethering`（默认关闭）、`SmsSyncEnabled`（默认关闭）、`SmsToastEnabled`（默认开启）与 `SmsSenderFilter`（默认为空）不在旧键里，旧文件缺字段时按各自的默认值处理。
 
@@ -108,7 +154,7 @@
 - **保留在注册表的两样东西**：`HKCU\...\Run\AdbDeviceVitals` 是 Windows 的启动登记（`--startup` 靠命令行参数判断，不读注册表）；旧键里的 `MigratedTo` 是迁移状态。两者都不是用户配置。
 - **不动的地方**：CSV 日志与 `tether.log` 仍在 `%LOCALAPPDATA%\AdbDeviceVitals\logs`。CI 的 zip 里本来就只有 exe、README、LICENSE，配置文件由程序首次运行生成；迁移到框架依赖单文件 exe 后仍然只发布一个 exe，自更新只替换它、配置天然保留。唯一新增的是目标机器要有 **Microsoft Windows Desktop Runtime 10**，这个由安装说明承担，不进 zip。
 
-## 实现说明：USB 网络共享掉线自动恢复
+### 实现说明：USB 网络共享掉线自动恢复
 
 设置项 `AutoRecoverUsbTethering`，默认关闭，保存在 `settings.json`。判定逻辑放在 `Services/UsbTetherWatchdog.cs`，是纯状态机：不碰 ADB、不读系统时间，时间由调用方传入，便于在 `ParserTests` 里推时钟验证。
 
@@ -120,7 +166,7 @@
 - **手动意图**：`UsbTetherWatchdog` 的 `NoteManualOff` / `NoteManualOn` 与 `_manualOff` 仍保留在状态机里（`ParserTests` 覆盖），但主窗口已无手动开关，运行时不再产生 `NoteManualOff`；设置页把守护从关改成开时仍调 `NoteManualOn` 重置状态。托盘提示：开始尝试与恢复成功各一次，失败只在第一次弹气泡；手机侧共享状态不占主界面，放在「网速」卡片 ⓘ 打开的网络详情弹窗里。
 - **不碰热点链路**：守护结果不走 `StartPcHotspotIfPending`，自动开热点仍然只在开机链路里触发一次。
 
-## 实现说明：短信通知同步
+### 实现说明：短信通知同步
 
 需求口径：**应用打开之后开始监听，打开之前的短信不管**；界面上要有近期短信列表。不要求实时推送。
 
@@ -138,7 +184,7 @@
 - **失败处理**：`IsPermissionDenied` 单独识别 `Permission Denial` / `READ_SMS` / `SecurityException`，给中文排障提示并在托盘提醒一次；命令失败、超时、手机时钟读不到都走同一条错误通道，不会静默变成「没有新短信」。成功后清除错误标记，下次失败还能再提示。
 - **验证**：`ParserTests` 有解析与配置断言，主窗口、设置页、短信窗口都有渲染截图；另用只读探针在真机上跑过「建立基线 → 增量读 15 条 → 下一轮去重 0 条 → 开关关闭」全链路，探针不输出任何短信正文。
 
-## 实现说明：WPF / .NET 10 全量迁移
+### 实现说明：WPF / .NET 10 全量迁移
 
 原项目是 WinForms + .NET Framework 4.6，用系统自带的 C# 编译器编成零依赖单 exe。这套约束是为了"拷一个 exe 就能跑"，代价是 WinRT 全靠反射、界面只能手绘。在确认「这个工具基本就我自己使用、硬约束可以去掉」之后，整体迁到 WPF + .NET 10，界面按 Windows 11「设置」重做。
 
