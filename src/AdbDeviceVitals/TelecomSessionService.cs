@@ -82,6 +82,7 @@ namespace AdbDeviceVitals
 
         private BroadnetLoginWindow _window;
         private string _snapshotPath;
+        private string _cookiesPath;
         private string _userDataFolder;
         private bool _loggedIn;
         private bool _lastLoggedForTrace;
@@ -104,6 +105,7 @@ namespace AdbDeviceVitals
             {
                 Directory.CreateDirectory(configDirectory);
                 _snapshotPath = Path.Combine(configDirectory, _pathPrefix + "-session.json");
+                _cookiesPath = Path.Combine(configDirectory, _pathPrefix + "-cookies.json");
                 _userDataFolder = Path.Combine(configDirectory, _pathPrefix + "-webview");
                 Directory.CreateDirectory(_userDataFolder);
             }
@@ -118,7 +120,13 @@ namespace AdbDeviceVitals
         public string Status { get { lock (_gate) return _status; } }
         public bool HasSnapshot
         {
-            get { return !string.IsNullOrEmpty(_snapshotPath) && File.Exists(_snapshotPath); }
+            get
+            {
+                if (string.IsNullOrEmpty(_snapshotPath)) return false;
+                // 新版本 cookie 单独落盘；老版本只有 storage 快照也算有。
+                return File.Exists(_snapshotPath) ||
+                    (!string.IsNullOrEmpty(_cookiesPath) && File.Exists(_cookiesPath));
+            }
         }
         public bool LastAttemptExpired { get; private set; }
 
@@ -272,7 +280,13 @@ namespace AdbDeviceVitals
                     await _window.InitializeAsync(_userDataFolder);
                     WriteTrace("silent: webview2 initialized (offscreen)");
                 }
-                if (!IsLoggedIn) await RestoreSnapshotAsync();
+                if (!IsLoggedIn)
+                {
+                    // 先在 189.cn origin 下加载页面，再注入 storage（about:blank 会丢）；
+                    // cookie 通过 CookieManager 注入，与当前页面无关，顺带一起恢复。
+                    await _window.NavigateAndWaitAsync(LoginUrl);
+                    await RestoreSnapshotAsync();
+                }
 
                 // 带时间戳重新导航首页，触发站点自己发出两个业务接口。
                 string freshUrl = LoginUrl + "?_t=" + DateTime.UtcNow.Ticks.ToString(CultureInfo.InvariantCulture);
@@ -573,6 +587,18 @@ namespace AdbDeviceVitals
 
         private async Task<bool> RestoreSnapshotAsync()
         {
+            // 先恢复 cookie（profile 级，about:blank 下也能注入），再恢复 storage。
+            // 电信登录票据在 189.cn 的 cookie 里，缺了它只有风控 storage 必然 anonymous-home。
+            if (!string.IsNullOrEmpty(_cookiesPath) && File.Exists(_cookiesPath) && _window != null)
+            {
+                try
+                {
+                    string cookieJson = File.ReadAllText(_cookiesPath, System.Text.Encoding.UTF8);
+                    int n = _window.RestoreCookies(cookieJson);
+                    WriteTrace("cookies restored=" + n);
+                }
+                catch (Exception ex) { WriteTrace("cookies restore ERR " + ex.Message); }
+            }
             if (string.IsNullOrEmpty(_snapshotPath) || !File.Exists(_snapshotPath)) return false;
             try
             {
@@ -592,6 +618,20 @@ namespace AdbDeviceVitals
         private async Task SaveSnapshotAsync()
         {
             if (string.IsNullOrEmpty(_snapshotPath)) return;
+            // 页面已渲染成未登录首页时，站点会把 cookie/storage 改写成匿名态。此时若照常
+            // 落盘，就会用匿名票据覆盖掉上一份还能用的登录快照（实测 02:18 那次少了条
+            // cookie），下次重开必然 anonymous-home。业务接口可能仍有残留数据（apiOk=1），
+            // 但那不代表浏览器里还留着登录态——必须在写盘前挡一道。
+            try
+            {
+                Detection page = ParseDetection(await _window.EvaluateAsync(DetectScript));
+                if (page.PageKind == "anonymous-home")
+                {
+                    WriteTrace("snapshot save skipped: page=anonymous-home (keep last good snapshot)");
+                    return;
+                }
+            }
+            catch { }
             try
             {
                 string raw = await _window.EvaluateAsync(DumpScript);
@@ -600,6 +640,17 @@ namespace AdbDeviceVitals
                 File.WriteAllText(_snapshotPath, json, new System.Text.UTF8Encoding(false));
             }
             catch { }
+            // 登录票据在 cookie 里，必须一并落盘，否则重开进程后登录态必丢。
+            try
+            {
+                string cookieJson = await _window.GetCookiesJsonAsync(LoginUrl);
+                if (!string.IsNullOrEmpty(cookieJson))
+                {
+                    File.WriteAllText(_cookiesPath, cookieJson, new System.Text.UTF8Encoding(false));
+                    WriteTrace("cookies saved=" + cookieJson.Length + "B");
+                }
+            }
+            catch (Exception ex) { WriteTrace("cookies save ERR " + ex.Message); }
         }
 
         private void FinishWait(bool success, string status)

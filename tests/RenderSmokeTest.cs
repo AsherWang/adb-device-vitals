@@ -402,42 +402,76 @@ internal static class RenderSmokeTest
         return count;
     }
 
-    /// <summary>广电套餐详情窗：用 ApplyCore 注入账户信息和多行套餐（基础类型，
-    /// 不需要构造 internal 的 BroadnetTraffic），强制 DataTemplate 绑定真正求值。</summary>
+    /// <summary>套餐详情窗：两个运营商 tab 各注入样例数据，强制 DataTemplate 绑定与自绘控件渲染。</summary>
     private static void RenderBroadnetDetails(string path)
     {
         BroadnetTrafficWindow window = Prepare(new BroadnetTrafficWindow(null));
         // 字段顺序：name|remain|unit|total|used
-        string rows = "当月套餐|58.3|G|162|103.7\n"
+        string rowsBroadnet = "当月套餐|58.3|G|162|103.7\n"
                     + "上月结转|0|G|91.9|91.9\n"
                     + "赠送流量|12.1|G|20|7.9";
-        MethodInfo applyCore = typeof(BroadnetTrafficWindow).GetMethod("ApplyCore",
-            BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public);
-        if (applyCore == null) throw new MissingMethodException("BroadnetTrafficWindow.ApplyCore");
-        applyCore.Invoke(window, new object[] { "138****0000", "83.47", "16.43", "123.14 G", rows });
-        // 用量统计区：24 小时样例 + 今日/本月/日均读数，强制自绘控件与文本渲染。
-        MethodInfo applyUsage = typeof(BroadnetTrafficWindow).GetMethod("ApplyUsageNumbers",
-            BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public);
-        if (applyUsage == null) throw new MissingMethodException("BroadnetTrafficWindow.ApplyUsageNumbers");
+        string rowsTelecom = "通用流量|138.62|G|155|16.38\n"
+                    + "专用流量|4.47|G|31.32|26.85";
         double[] hourly = new double[24];
         hourly[9] = 1.2; hourly[12] = 4.5; hourly[20] = 2.3;
-        applyUsage.Invoke(window, new object[] { 3.4, 8.0, 1.6, hourly, 144, true });
+
+        // 强制两个 tab 都实例化（未选中的 TabItem 内容延迟加载）。
+        System.Windows.Controls.TabControl tabs =
+            NamedElement(window, "CarrierTabs") as System.Windows.Controls.TabControl;
+        if (tabs == null) throw new InvalidOperationException("Carrier tabs missing.");
+        tabs.SelectedIndex = 0; window.UpdateLayout();
+        tabs.SelectedIndex = 1; window.UpdateLayout();
+        tabs.SelectedIndex = 0; window.UpdateLayout();
+
+        // 广电 tab
+        object broadnetPanel = NamedElement(window, "BroadnetPanel");
+        FillCarrierPanel(broadnetPanel, "138****0000", "83.47", "16.43", "123.14 G", rowsBroadnet,
+            3.4, 8.0, 1.6, hourly, 144, true);
+        // 电信 tab
+        object telecomPanel = NamedElement(window, "TelecomPanel");
+        FillCarrierPanel(telecomPanel, "139****0000", "56.12", "9.10", "43.23", rowsTelecom,
+            0.07, 0.61, 0.3, hourly, 22, false);
+
         window.UpdateLayout();
         Dispatcher.CurrentDispatcher.Invoke(DispatcherPriority.Render, new Action(delegate { }));
 
         System.Windows.Controls.ItemsControl list =
-            NamedElement(window, "PackageList") as System.Windows.Controls.ItemsControl;
+            NamedElement(broadnetPanel, "PackageList") as System.Windows.Controls.ItemsControl;
         if (list == null || list.Items.Count != 3)
-            throw new InvalidOperationException("Broadnet detail should bind 3 package rows.");
+            throw new InvalidOperationException("Broadnet tab should bind 3 package rows.");
+        System.Windows.Controls.ItemsControl list2 =
+            NamedElement(telecomPanel, "PackageList") as System.Windows.Controls.ItemsControl;
+        if (list2 == null || list2.Items.Count != 2)
+            throw new InvalidOperationException("Telecom tab should bind 2 package rows.");
         System.Windows.Controls.TextBlock used =
-            NamedElement(window, "UsedText") as System.Windows.Controls.TextBlock;
+            NamedElement(broadnetPanel, "UsedText") as System.Windows.Controls.TextBlock;
         if (used == null || used.Text != "123.14 G")
-            throw new InvalidOperationException("Broadnet detail should show monthly used traffic.");
+            throw new InvalidOperationException("Broadnet tab should show monthly used traffic.");
+        System.Windows.Controls.TextBlock used2 =
+            NamedElement(telecomPanel, "UsedText") as System.Windows.Controls.TextBlock;
+        if (used2 == null || used2.Text != "43.23")
+            throw new InvalidOperationException("Telecom tab should show its own monthly used traffic.");
         System.Windows.Controls.TextBlock today =
-            NamedElement(window, "UsageTodayText") as System.Windows.Controls.TextBlock;
+            NamedElement(broadnetPanel, "UsageTodayText") as System.Windows.Controls.TextBlock;
         if (today == null || today.Text != "3.4 G")
-            throw new InvalidOperationException("Broadnet detail should show today's usage.");
+            throw new InvalidOperationException("Broadnet tab should show today's usage.");
         Save(window, path);
+    }
+
+    /// <summary>用反射把基础类型样例填进一个运营商面板（内部方法不暴露给测试项目）。</summary>
+    private static void FillCarrierPanel(object panel, string phone, string balance, string spend,
+        string used, string rows, double today, double month, double avg, double[] hourly,
+        int sampleCount, bool hasGap)
+    {
+        if (panel == null) throw new InvalidOperationException("Carrier tab panel missing.");
+        MethodInfo applyCore = panel.GetType().GetMethod("ApplyCore",
+            BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public);
+        if (applyCore == null) throw new MissingMethodException("TrafficCarrierPanel.ApplyCore");
+        applyCore.Invoke(panel, new object[] { phone, balance, spend, used, rows });
+        MethodInfo applyUsage = panel.GetType().GetMethod("ApplyUsageNumbers",
+            BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public);
+        if (applyUsage == null) throw new MissingMethodException("TrafficCarrierPanel.ApplyUsageNumbers");
+        applyUsage.Invoke(panel, new object[] { today, month, avg, hourly, sampleCount, hasGap });
     }
 
     private static T Prepare<T>(T window) where T : Window

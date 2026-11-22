@@ -1,5 +1,8 @@
 using System;
+using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
+using System.Text.Json;
 using System.Threading.Tasks;
 using System.Windows;
 using Microsoft.Web.WebView2.Core;
@@ -200,6 +203,76 @@ namespace AdbDeviceVitals
         internal async Task<string> EvaluateAsync(string script)
         {
             return await Browser.ExecuteScriptAsync(script);
+        }
+
+        /// <summary>
+        /// 导出指定 URI 可见的 cookie（含 HttpOnly），用于跨进程保存运营商登录态。
+        /// 电信的登录票据只在 cookie 里，sessionStorage/localStorage 快照救不了重开。
+        /// </summary>
+        internal async Task<string> GetCookiesJsonAsync(string uri)
+        {
+            CoreWebView2 core = Browser.CoreWebView2;
+            if (core == null) return "[]";
+            IReadOnlyList<CoreWebView2Cookie> cookies = await core.CookieManager.GetCookiesAsync(uri);
+            var items = new List<Dictionary<string, object>>();
+            foreach (CoreWebView2Cookie c in cookies)
+            {
+                items.Add(new Dictionary<string, object>
+                {
+                    { "domain", c.Domain },
+                    { "name", c.Name },
+                    { "value", c.Value },
+                    { "path", c.Path },
+                    { "httpOnly", c.IsHttpOnly },
+                    { "secure", c.IsSecure },
+                    { "sameSite", (int)c.SameSite },
+                    // 站点可能下发会话 cookie（Expires=MinValue），快照里改写成 30 天后过期，
+                    // 注入时才能落成持久 cookie，程序重开仍有效。
+                    { "expires", c.Expires == DateTime.MinValue
+                        ? DateTime.UtcNow.AddDays(30).ToString("o", CultureInfo.InvariantCulture)
+                        : c.Expires.ToString("o", CultureInfo.InvariantCulture) }
+                });
+            }
+            return JsonSerializer.Serialize(items);
+        }
+
+        /// <summary>
+        /// 从快照恢复 cookie。必须在导航到目标 origin 之前调用；CookieManager 操作的是
+        /// profile 级存储，与当前页面无关，about:blank 下也能注入。
+        /// </summary>
+        internal int RestoreCookies(string json)
+        {
+            CoreWebView2 core = Browser.CoreWebView2;
+            if (core == null || string.IsNullOrWhiteSpace(json)) return 0;
+            int count = 0;
+            using (JsonDocument doc = JsonDocument.Parse(json))
+            {
+                if (doc.RootElement.ValueKind != JsonValueKind.Array) return 0;
+                foreach (JsonElement item in doc.RootElement.EnumerateArray())
+                {
+                    try
+                    {
+                        string domain = item.GetProperty("domain").GetString();
+                        string name = item.GetProperty("name").GetString();
+                        string value = item.GetProperty("value").GetString();
+                        if (string.IsNullOrEmpty(domain) || string.IsNullOrEmpty(name)) continue;
+                        CoreWebView2Cookie cookie = core.CookieManager.CreateCookie(
+                            name, value, domain, item.TryGetProperty("path", out JsonElement p) ? p.GetString() : "/");
+                        if (item.TryGetProperty("httpOnly", out JsonElement h)) cookie.IsHttpOnly = h.GetBoolean();
+                        if (item.TryGetProperty("secure", out JsonElement s)) cookie.IsSecure = s.GetBoolean();
+                        if (item.TryGetProperty("sameSite", out JsonElement ss))
+                            cookie.SameSite = (CoreWebView2CookieSameSiteKind)ss.GetInt32();
+                        if (item.TryGetProperty("expires", out JsonElement ex) &&
+                            DateTime.TryParse(ex.GetString(), CultureInfo.InvariantCulture,
+                                DateTimeStyles.RoundtripKind, out DateTime expires))
+                            cookie.Expires = expires;
+                        core.CookieManager.AddOrUpdateCookie(cookie);
+                        count++;
+                    }
+                    catch { /* 单条坏 cookie 不影响其它条目 */ }
+                }
+            }
+            return count;
         }
 
         /// <summary>退出程序时调用，允许真正销毁 WebView2。</summary>

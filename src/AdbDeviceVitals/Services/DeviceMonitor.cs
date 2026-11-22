@@ -151,6 +151,18 @@ namespace AdbDeviceVitals.Services
                 // 有数据卡映射就只读它的信号块；映射不到时走旧的首块行为。
                 AdbParsers.ParseTelephony(telephony.Output, target, phoneId);
             }
+            // 诊断：区分「采集失败沿用旧值」和「读到新值」；正常运行时可关掉。
+            new TetherLog().Write("signal poll serial=" + serial
+                + " ok=" + (telephony.Success ? "1" : "0")
+                + " exit=" + telephony.ExitCode
+                + " out=" + telephony.Output.Length
+                + " err=" + telephony.Error.Length
+                + " sub=" + target.ActiveDataSubId
+                + " phone=" + target.SignalPhoneId
+                + " rsrp=" + target.RsrpDbm
+                + " rsrq=" + target.RsrqDb
+                + " sinr=" + target.SinrDb
+                + " net=" + target.NetworkType);
             parts.Signal = target;
         }
 
