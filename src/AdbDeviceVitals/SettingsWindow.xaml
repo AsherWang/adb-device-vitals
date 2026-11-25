@@ -133,33 +133,48 @@
                             </StackPanel>
                         </ui:Card>
 
-                        <TextBlock Text="目标设备" FontSize="15" FontWeight="SemiBold" Margin="0,0,0,10" />
-                        <ui:Card>
+                        <TextBlock Text="设备" FontSize="15" FontWeight="SemiBold" Margin="0,0,0,10" />
+                        <ui:Card Margin="0,0,0,20">
                             <StackPanel Margin="16,14">
                                 <Grid>
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="*" />
                                         <ColumnDefinition Width="Auto" />
-                                    </Grid.ColumnDefinitions>
-                                    <ComboBox Grid.Column="0" x:Name="TargetDeviceBox" VerticalContentAlignment="Center" SelectionChanged="TargetDeviceBox_SelectionChanged" />
-                                    <Button Grid.Column="1" x:Name="RefreshDevicesButton" Content="刷新列表" Padding="14,6" Margin="8,0,0,0" Click="RefreshDevicesButton_Click" />
-                                </Grid>
-                                <TextBlock x:Name="DeviceHintText" Text="" FontSize="12" Opacity="0.72" Margin="0,10,0,0" TextWrapping="Wrap" />
-                                <Grid Margin="0,14,0,0">
-                                    <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="Auto" />
-                                        <ColumnDefinition Width="*" />
                                     </Grid.ColumnDefinitions>
-                                    <TextBlock Grid.Column="0" Text="流量运营商" FontSize="13" VerticalAlignment="Center" Margin="0,0,14,0" />
-                                    <ComboBox Grid.Column="1" x:Name="DeviceCarrierBox" VerticalContentAlignment="Center"
-                                              SelectionChanged="DeviceCarrierBox_SelectionChanged">
-                                        <ComboBoxItem Content="不查询（默认）" Tag="0" />
-                                        <ComboBoxItem Content="中国广电" Tag="1" />
-                                        <ComboBoxItem Content="中国电信" Tag="2" />
-                                    </ComboBox>
+                                    <TextBlock Grid.Column="0" x:Name="DeviceStatusText" Text="" FontSize="13"
+                                               VerticalAlignment="Center" TextWrapping="Wrap" />
+                                    <Button Grid.Column="1" x:Name="RefreshDevicesButton" Content="刷新列表" Padding="12,5"
+                                            Margin="8,0,0,0" Click="RefreshDevicesButton_Click" />
+                                    <ui:Button Grid.Column="2" x:Name="AddDeviceButton" Content="＋ 添加设备" Appearance="Primary"
+                                               Padding="14,5" Margin="8,0,0,0" Click="AddDeviceButton_Click" />
                                 </Grid>
-                                <TextBlock x:Name="CarrierHintText" Text="为主界面余量卡指定这台手机的运营商；留「不查询」则该设备不显示流量卡。"
-                                           FontSize="12" Opacity="0.62" Margin="0,8,0,0" TextWrapping="Wrap" />
+
+                                <TextBlock Text="已添加的设备" FontSize="13" FontWeight="SemiBold" Margin="0,18,0,0" />
+                                <TextBlock Text="优先级数字越小越靠前；当前设备掉线时自动切到下一台，高优先级重连后自动切回。"
+                                           FontSize="12" Opacity="0.62" Margin="0,4,0,8" TextWrapping="Wrap" />
+                                <ListBox x:Name="ManagedDeviceListBox" MinHeight="96" MaxHeight="240"
+                                         SelectionMode="Single" ScrollViewer.VerticalScrollBarVisibility="Auto">
+                                    <ListBox.ItemTemplate>
+                                        <DataTemplate>
+                                            <Grid Margin="2,4">
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="*" />
+                                                    <ColumnDefinition Width="Auto" />
+                                                </Grid.ColumnDefinitions>
+                                                <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                                                    <TextBlock Text="{Binding Title}" FontSize="13" FontWeight="SemiBold" />
+                                                    <TextBlock Text="{Binding Detail}" FontSize="12" Opacity="0.66" Margin="0,2,0,0" />
+                                                    <TextBlock Text="{Binding Status}" FontSize="12" Margin="0,2,0,0" TextWrapping="Wrap" />
+                                                </StackPanel>
+                                                <Button Grid.Column="1" Content="⚙ 设置" Padding="10,5"
+                                                        VerticalAlignment="Center" Click="EditManagedDevice_Click" />
+                                            </Grid>
+                                        </DataTemplate>
+                                    </ListBox.ItemTemplate>
+                                </ListBox>
+                                <TextBlock x:Name="EmptyDeviceText" Text="" FontSize="12" Opacity="0.62"
+                                           Margin="0,10,0,0" TextWrapping="Wrap" />
                             </StackPanel>
                         </ui:Card>
                     </StackPanel>

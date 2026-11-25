@@ -5,6 +5,7 @@ using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
+using AdbDeviceVitals.Models;
 using AdbDeviceVitals.Services;
 using WF = System.Windows.Forms;
 
@@ -24,10 +25,25 @@ namespace AdbDeviceVitals
         private readonly Func<Task> _checkForUpdates;
         private readonly Dictionary<string, TrafficCarrier> _detectedCarriers =
             new Dictionary<string, TrafficCarrier>(StringComparer.OrdinalIgnoreCase);
+        // 主动添加式：受管设备是唯一真值，主列表只展示这些设备。
+        private readonly List<ManagedDevice> _managed = new List<ManagedDevice>();
+        private IList<AdbDevice> _onlineDevices = new List<AdbDevice>();
         private bool _loadingDevices;
-        private bool _suppressChoiceEvents;
         private int _authorizedCount;
         private int _unauthorizedCount;
+
+        /// <summary>主列表的一行：标题、详情、状态。</summary>
+        private sealed class ManagedDeviceRow
+        {
+            public ManagedDeviceRow(ManagedDevice device, string title, string detail, string status)
+            {
+                Device = device; Title = title; Detail = detail; Status = status;
+            }
+            public ManagedDevice Device { get; private set; }
+            public string Title { get; private set; }
+            public string Detail { get; private set; }
+            public string Status { get; private set; }
+        }
 
         public SettingsWindow(AdbClient adb, Func<Task> checkForUpdates)
         {
@@ -53,12 +69,7 @@ namespace AdbDeviceVitals
             AboutVersionText.Text = version;
             AboutConfigPathText.Text = "配置文件：" + AppSettings.ConfigFilePath;
 
-            _suppressChoiceEvents = true;
-            TargetDeviceBox.Items.Add(new DeviceChoice(string.Empty, "自动选择（只连接一台时生效）", false));
-            TargetDeviceBox.SelectedIndex = 0;
-            _suppressChoiceEvents = false;
-            UpdateDeviceHint();
-            UpdateCarrierChoice();
+            foreach (ManagedDevice device in AppSettings.ManagedDeviceList) _managed.Add(device);
         }
 
         private async void Window_Loaded(object sender, RoutedEventArgs e)
@@ -129,130 +140,137 @@ namespace AdbDeviceVitals
 
         private void FillDeviceChoices(IList<AdbDevice> devices, string error)
         {
-            string preferred = AppSettings.TargetDeviceSerial;
+            _onlineDevices = devices ?? new List<AdbDevice>();
             _authorizedCount = 0;
             _unauthorizedCount = 0;
-
-            _suppressChoiceEvents = true;
-            TargetDeviceBox.Items.Clear();
-            TargetDeviceBox.Items.Add(new DeviceChoice(string.Empty, "自动选择（只连接一台时生效）", false));
-            int selected = 0;
-
             foreach (AdbDevice device in devices)
             {
-                if (!DeviceSelection.IsAuthorized(device))
+                if (DeviceSelection.IsAuthorized(device)) _authorizedCount++;
+                else _unauthorizedCount++;
+            }
+            DeviceStatusText.Tag = error;
+            UpdateDeviceStatus();
+            RefreshManagedList();
+        }
+
+        /// <summary>主列表只渲染 _managed：每台一行，显示型号/序列、配置与状态。</summary>
+        private void RefreshManagedList()
+        {
+            string active = DeviceSelection.EffectiveSerial;
+            object selected = ManagedDeviceListBox.SelectedItem;
+            ManagedDeviceListBox.Items.Clear();
+
+            // 按优先级数字升序展示（_managed 已排序）。
+            foreach (ManagedDevice device in _managed)
+            {
+                string model = null;
+                foreach (AdbDevice online in _onlineDevices)
                 {
-                    _unauthorizedCount++;
-                    continue;
+                    if (string.Equals(online.Serial, device.Serial, StringComparison.OrdinalIgnoreCase))
+                    { model = online.Model; break; }
                 }
-                _authorizedCount++;
-                string label = (string.IsNullOrEmpty(device.Model) ? "Android 设备" : device.Model)
-                    + "（" + DeviceSelection.ShortSerial(device.Serial) + "）";
-                TargetDeviceBox.Items.Add(new DeviceChoice(device.Serial, label, false));
-                if (preferred.Length > 0 && string.Equals(device.Serial, preferred, StringComparison.Ordinal))
-                    selected = TargetDeviceBox.Items.Count - 1;
+                string name = string.IsNullOrEmpty(model) ? "Android 设备" : model;
+                string title = "P" + device.Priority.ToString(System.Globalization.CultureInfo.InvariantCulture)
+                    + " · " + name + "（" + DeviceSelection.ShortSerial(device.Serial) + "）";
+                string carrier = device.Carrier == TrafficCarrier.None
+                    ? "运营商自动" : CarrierMapping.DisplayName(device.Carrier);
+                string detail = "优先级 " + device.Priority + " · " + carrier + " · " + device.SlotText;
+                detail += device.MeteredOnUsb ? " · 共享时自动按流量计费" : " · 手动管理计费";
+
+                bool isOnline = false;
+                foreach (AdbDevice item in _onlineDevices)
+                    if (DeviceSelection.IsAuthorized(item)
+                        && string.Equals(item.Serial, device.Serial, StringComparison.OrdinalIgnoreCase)) { isOnline = true; break; }
+                string status = !isOnline ? "未连接"
+                    : string.Equals(active, device.Serial, StringComparison.OrdinalIgnoreCase) ? "● 当前使用" : "在线";
+
+                if (device.MeteredOnUsb && (Application.Current as App)?.UsbMetering is UsbMeteredConnections metering)
+                    status += " · " + metering.Status(device.Serial);
+                ManagedDeviceRow row = new ManagedDeviceRow(device, title, detail, status);
+                ManagedDeviceListBox.Items.Add(row);
+                if (selected is ManagedDeviceRow
+                    && string.Equals(((ManagedDeviceRow)selected).Device.Serial, device.Serial, StringComparison.OrdinalIgnoreCase))
+                    ManagedDeviceListBox.SelectedItem = row;
             }
 
-            if (preferred.Length > 0 && selected == 0)
-            {
-                // 记下来的设备不在当前列表里：显式摆到下拉框里并默认选中，
-                // 用户一打开设置就能看见，且保存时会被拦下，必须重新选一台。
-                TargetDeviceBox.Items.Add(new DeviceChoice(preferred,
-                    "⚠ 预设设备 " + DeviceSelection.ShortSerial(preferred) + " 未连接，请重新选择", true));
-                selected = TargetDeviceBox.Items.Count - 1;
-            }
-
-            TargetDeviceBox.SelectedIndex = selected;
-            _suppressChoiceEvents = false;
-            DeviceHintText.Tag = error;
-            UpdateDeviceHint();
-            // SelectedIndex 可能被 suppress 屏蔽或选中项没变，显式刷一次运营商下拉，
-            // 否则刚识别出的运营商不会预填进去。
-            UpdateCarrierChoice();
+            EmptyDeviceText.Text = _managed.Count == 0
+                ? "还没有添加设备。点右上角「＋ 添加设备」从当前连接的手机里挑选。"
+                : string.Empty;
+            AddDeviceButton.IsEnabled = true;
         }
 
-        private void TargetDeviceBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+        private void AddDeviceButton_Click(object sender, RoutedEventArgs e)
         {
-            if (_suppressChoiceEvents) return;
-            UpdateDeviceHint();
-            UpdateCarrierChoice();
+            List<string> existing = new List<string>();
+            foreach (ManagedDevice device in _managed) existing.Add(device.Serial);
+            // 新增优先级默认取现有最大值 + 1，避免和已添加设备撞优先级。
+            int nextPriority = 1;
+            foreach (ManagedDevice device in _managed) nextPriority = Math.Max(nextPriority, device.Priority + 1);
+
+            DeviceEditorWindow editor = new DeviceEditorWindow(_carrierDetector, _onlineDevices,
+                null, existing, TrafficCarrier.None, nextPriority);
+            editor.Owner = this;
+            if (editor.ShowDialog() != true || editor.Result == null) return;
+
+            ManagedDevice added = editor.Result;
+            _managed.Add(added);
+            _managed.Sort(delegate(ManagedDevice a, ManagedDevice b) { return a.Priority.CompareTo(b.Priority); });
+            RefreshManagedList();
         }
 
-        /// <summary>运营商下拉跟着当前选中的设备走；已手动配置优先，否则用 SIM 自动识别的结果。</summary>
-        private void UpdateCarrierChoice()
+        private void EditManagedDevice_Click(object sender, RoutedEventArgs e)
         {
-            DeviceChoice choice = TargetDeviceBox.SelectedItem as DeviceChoice;
-            string serial = choice == null ? string.Empty : choice.Serial;
-            TrafficCarrier manual = serial.Length == 0
-                ? TrafficCarrier.None
-                : CarrierMapping.Get(AppSettings.CarrierByDevice, serial);
-            TrafficCarrier detected = TrafficCarrier.None;
-            bool autoDetected = false;
-            if (serial.Length > 0 && manual == TrafficCarrier.None)
+            Button button = sender as Button;
+            ManagedDeviceRow row = button == null ? null : button.DataContext as ManagedDeviceRow;
+            if (row == null) return;
+
+            List<string> existing = new List<string>();
+            foreach (ManagedDevice device in _managed) existing.Add(device.Serial);
+            TrafficCarrier detected;
+            lock (_detectedCarriers)
+                _detectedCarriers.TryGetValue(row.Device.Serial, out detected);
+
+            DeviceEditorWindow editor = new DeviceEditorWindow(_carrierDetector, _onlineDevices,
+                row.Device, existing, detected);
+            editor.Owner = this;
+            if (editor.ShowDialog() != true) return;
+
+            if (editor.Removed)
             {
-                lock (_detectedCarriers)
-                    _detectedCarriers.TryGetValue(serial, out detected);
-                autoDetected = detected != TrafficCarrier.None;
+                _managed.Remove(row.Device);
             }
-            _suppressChoiceEvents = true;
-            DeviceCarrierBox.SelectedIndex = (int)(autoDetected ? detected : manual);
-            _suppressChoiceEvents = false;
-            if (CarrierHintText != null)
+            else if (editor.Result != null)
             {
-                if (serial.Length == 0)
-                    CarrierHintText.Text = "自动选择模式下无法指定运营商；请先在上方选定一台设备。";
-                else if (autoDetected)
-                    CarrierHintText.Text = "已从 SIM 卡自动识别为「" + CarrierMapping.DisplayName(detected)
-                        + "」；可手动修改，保存后生效。识别不到时可在此手动指定。";
-                else
-                    CarrierHintText.Text = "未从 SIM 卡识别到支持的运营商；请手动指定。留「不查询」则该设备不显示流量卡。";
+                int index = _managed.IndexOf(row.Device);
+                if (index >= 0) _managed[index] = editor.Result;
+                _managed.Sort(delegate(ManagedDevice a, ManagedDevice b) { return a.Priority.CompareTo(b.Priority); });
             }
+            RefreshManagedList();
         }
 
-        private void DeviceCarrierBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+        /// <summary>顶部状态摘要：当前生效设备 + 降级/失败提示，只显示一次。</summary>
+        private void UpdateDeviceStatus()
         {
-            if (_suppressChoiceEvents || CarrierHintText == null) return;
-            DeviceChoice choice = TargetDeviceBox.SelectedItem as DeviceChoice;
-            if (choice == null || choice.Serial.Length == 0) return;
-            TrafficCarrier selected = (TrafficCarrier)DeviceCarrierBox.SelectedIndex;
-            CarrierHintText.Text = selected == TrafficCarrier.None
-                ? "这台手机不显示流量余量卡。"
-                : "保存后，选中这台手机时主界面余量卡会显示「" + CarrierMapping.DisplayName(selected) + "」的数据。";
-        }
+            string error = DeviceStatusText.Tag as string;
+            string active = DeviceSelection.EffectiveSerial;
+            string activeLabel = string.IsNullOrEmpty(active) ? "—" : DeviceSelection.ShortSerial(active);
 
-        private void UpdateDeviceHint()
-        {
-            DeviceChoice choice = TargetDeviceBox.SelectedItem as DeviceChoice;
-            string error = DeviceHintText.Tag as string;
-            DeviceHintText.Foreground = Muted;
-
-            if (choice != null && choice.Missing)
-            {
-                DeviceHintText.Foreground = Warning;
-                DeviceHintText.Text = "记录的设备当前不在线。请从上面的列表重新选择一台已连接的设备，或选择「自动选择」，然后再保存。";
-                string active = DeviceSelection.ActiveSerial;
-                if (active.Length > 0)
-                    DeviceHintText.Text += " 程序已临时切换到 " + DeviceSelection.ShortSerial(active)
-                        + "，预设设备回来后会自动切回；这里保存会把当前选择固定为预设。";
-                return;
-            }
             if (!string.IsNullOrEmpty(error))
             {
-                DeviceHintText.Foreground = Warning;
-                DeviceHintText.Text = "读取设备列表失败：" + error;
+                DeviceStatusText.Foreground = Warning;
+                DeviceStatusText.Text = "读取设备列表失败：" + error;
                 return;
             }
-            if (_authorizedCount > 1 && (choice == null || choice.Serial.Length == 0))
+            if (_managed.Count == 0)
             {
-                DeviceHintText.Foreground = Warning;
-                DeviceHintText.Text = "当前有 " + _authorizedCount + " 台已授权设备，请明确指定其中一台，否则不会监控也不会开关共享。";
+                DeviceStatusText.Foreground = Muted;
+                DeviceStatusText.Text = "未添加设备";
                 return;
             }
-
-            string text = "同时连接多台手机时，程序只对所选设备采集数据并开关 USB 网络共享；留「自动选择」时仅在只接一台设备的情况下生效。";
+            DeviceStatusText.Foreground = active.Length > 0 ? Muted : Warning;
+            DeviceStatusText.Text = active.Length > 0 ? "当前使用 " + activeLabel : "等待已添加的设备连接…";
             if (_unauthorizedCount > 0)
-                text += " 另有 " + _unauthorizedCount + " 台设备未授权 USB 调试。";
-            DeviceHintText.Text = text;
+                DeviceStatusText.Text += " · " + _unauthorizedCount + " 台未授权";
         }
 
         private async void CheckUpdatesButton_Click(object sender, RoutedEventArgs e)
@@ -309,19 +327,14 @@ namespace AdbDeviceVitals
                 return;
             }
 
-            DeviceChoice choice = TargetDeviceBox.SelectedItem as DeviceChoice;
-            if (choice != null && choice.Missing)
+            // 受管设备是唯一真值；旧的预设设备/优先级/运营商映射由 SettingsFile.Normalize 派生。
+            foreach (ManagedDevice device in _managed)
             {
-                MessageBox.Show(this,
-                    "之前记录的设备已不在线。请从下拉框中选择一台当前已连接的设备，或选择「自动选择」后再保存。",
-                    "需要重新选择设备", MessageBoxButton.OK, MessageBoxImage.Warning);
-                return;
-            }
-            string serial = choice == null ? string.Empty : choice.Serial;
-            if (serial.Length > 0 && !DeviceSelection.IsValidSerial(serial))
-            {
-                MessageBox.Show(this, "设备序列号不合法，请刷新列表后重新选择。", "设备无效", MessageBoxButton.OK, MessageBoxImage.Warning);
-                return;
+                if (!DeviceSelection.IsValidSerial(device.Serial))
+                {
+                    MessageBox.Show(this, "设备序列号不合法，请刷新列表后重新选择。", "设备无效", MessageBoxButton.OK, MessageBoxImage.Warning);
+                    return;
+                }
             }
 
             try
@@ -330,11 +343,7 @@ namespace AdbDeviceVitals
                 AppSettings.Save(new SettingsData
                 {
                     AdbDirectory = directory,
-                    TargetDeviceSerial = serial,
-                    CarrierByDevice = serial.Length == 0
-                        ? AppSettings.CarrierByDevice
-                        : CarrierMapping.Set(AppSettings.CarrierByDevice, serial,
-                            (TrafficCarrier)DeviceCarrierBox.SelectedIndex),
+                    ManagedDevices = ManagedDeviceStore.Serialize(_managed),
                     AutoEnableUsbTethering = AutoEnableUsbTetheringSwitch.IsChecked == true,
                     AutoRecoverUsbTethering = AutoRecoverUsbTetheringSwitch.IsChecked == true,
                     AutoStartPcHotspot = AutoStartPcHotspotSwitch.IsChecked == true,

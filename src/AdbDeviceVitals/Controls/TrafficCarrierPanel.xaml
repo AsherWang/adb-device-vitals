@@ -66,7 +66,11 @@
 
             <ui:Card Margin="0,0,0,8" Padding="14,10">
                 <StackPanel>
-                    <TextBlock Text="用量统计" FontSize="14" FontWeight="SemiBold" Margin="0,0,0,8" />
+                    <DockPanel Margin="0,0,0,8">
+                        <Button DockPanel.Dock="Right" x:Name="AppUsageButton" Content="查看应用流量"
+                                ToolTip="打开这台手机共享网卡的 Windows 数据使用量" Padding="10,4" />
+                        <TextBlock Text="用量统计" FontSize="14" FontWeight="SemiBold" VerticalAlignment="Center" />
+                    </DockPanel>
                     <Grid Margin="0,0,0,6">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*" />

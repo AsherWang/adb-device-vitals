@@ -161,6 +161,10 @@ USB 网络共享切换后网卡会重新枚举，Windows 还要做一轮连通�
 
 **自动刷新**：如果发现本地有登录快照，或当前已登录，程序启动时会用隐藏的 WebView 窗口**自动取一次**余量（不弹窗、不打扰），此后**每 10 分钟**静默刷新一次。刷新用带时间戳的 URL 强制站点重发业务接口，拿到的是实时数据。若会话过期，程序会删掉失效快照并把卡片退回「**点击查询**」，等你再次点击走人工登录；一次网络抖动导致的失败则保留上次读数，不会误清成过期态。没有任何登录快照时根本不会初始化 WebView2。站点改版时按实际变动更新 `BroadnetSessionService.cs` 的 `ParseApiTraffic`（接口）或 `TrafficExtractScript`（DOM）。其余功能完全不受影响。
 
+## 查看电脑应用流量
+
+打开「套餐余量」，选择运营商，在「用量统计」右侧点击「查看应用流量」。程序会打开 Windows「数据使用量」，定位到该运营商手机当前的 USB 共享网卡。同一运营商有多台手机正在共享时，可以选择设备。应用排行采用 Windows 的统计，走代理的流量可能归在代理进程名下。
+
 ## 多台设备时指定手机
 
 同时通过 ADB 连接多台手机时（例如一台用来供网、另一台只是插着调试），程序**不会默认拿列表里的第一台**。设置里新增「目标设备」下拉框：
@@ -188,6 +192,8 @@ USB 网络共享切换后网卡会重新枚举，Windows 还要做一轮连通�
 ```
 
 `build.ps1` 用 `dotnet publish -p:PublishSingleFile=true -p:SelfContained=false` 生成**框架依赖的单文件 exe**：一个 `AdbDeviceVitals.exe` 里打包了托管 DLL 和 WPF-UI，运行时依赖系统里的 Desktop Runtime 10。输出位置 `src\AdbDeviceVitals\bin\Release\AdbDeviceVitals.exe`。
+
+本地重新构建时，脚本先完成发布，再检查当前 Windows 会话。若程序正在运行（包括缩到托盘），脚本会退出旧实例、替换 Release 中的 exe 并启动新版。程序原先未运行时只更新文件。编译或发布失败时，已有实例继续运行。
 
 因此发布包与自更新流程不用改：zip 里仍然只有 exe + README + LICENSE，程序内更新只替换这一个 exe，配置留在 `%USERPROFILE%\adb-device-vitals\settings.json`，不受影响。
 

@@ -21,6 +21,7 @@ internal static class ParserTests
         NetworkStats();
         DeviceSelectionTests();
         SettingsFileTests();
+        ManagedDeviceTests();
         SmsParserTests();
         SmsEnhancements();
         UsbTetherWatchdogTests();
@@ -221,6 +222,35 @@ internal static class ParserTests
         Equal(null, ambiguousFailover.Device, "no blind failover with several candidates");
         Equal(true, ambiguousFailover.NeedsSelection, "several candidates still need selection");
 
+        // 优先级：低优先级在用、高优先级重新连上 → 自动切过去并标记 SwitchBack。
+        DeviceSelection promoted = DeviceSelection.ResolveWithPriority(
+            new List<AdbDevice> { phone, tablet },
+            new List<string> { "M2102K1AC", "emulator-5554" }, "M2102K1AC", "emulator-5554");
+        Equal("M2102K1AC", promoted.Device == null ? null : promoted.Device.Serial, "higher priority takes over");
+        Equal(true, promoted.SwitchBack, "higher priority reconnect reports switch");
+        Equal("emulator-5554", promoted.PreviousSerial, "switch records source device");
+
+        // 已在最高优先级设备上：不重复提示切换。
+        DeviceSelection staying = DeviceSelection.ResolveWithPriority(
+            new List<AdbDevice> { phone, tablet },
+            new List<string> { "M2102K1AC", "emulator-5554" }, "M2102K1AC", "M2102K1AC");
+        Equal("M2102K1AC", staying.Device == null ? null : staying.Device.Serial, "top priority stays");
+        Equal(false, staying.SwitchBack, "staying on top priority is not a switch");
+        Equal(false, staying.JustSwitched, "staying on top priority is not a failover");
+
+        // 高优先级设备掉线：按优先级降到次高在线设备，标记 JustSwitched。
+        DeviceSelection demoted = DeviceSelection.ResolveWithPriority(
+            new List<AdbDevice> { tablet },
+            new List<string> { "M2102K1AC", "emulator-5554" }, "M2102K1AC", "M2102K1AC");
+        Equal("emulator-5554", demoted.Device == null ? null : demoted.Device.Serial, "fall to next priority when top offline");
+        Equal(true, demoted.JustSwitched, "priority demotion reports switch");
+
+        // 没有优先级配置：沿用旧的预设设备 + 故障转移行为。
+        DeviceSelection noPriority = DeviceSelection.ResolveWithPriority(
+            new List<AdbDevice> { phone, tablet }, new List<string>(), "M2102K1AC", "emulator-5554");
+        Equal("M2102K1AC", noPriority.Device == null ? null : noPriority.Device.Serial, "no priority keeps preferred behavior");
+        Equal(true, noPriority.SwitchBack, "no priority still reports switch back");
+
         Equal(true, DeviceSelection.IsAuthorized(phone), "device state authorized");
         Equal(false, DeviceSelection.IsAuthorized(pending), "unauthorized state rejected");
         Equal(true, DeviceSelection.IsValidSerial("emulator-5554"), "valid serial");
@@ -228,6 +258,66 @@ internal static class ParserTests
         Equal(false, DeviceSelection.IsValidSerial(string.Empty), "empty serial rejected");
         Equal("01234567…EF00", DeviceSelection.ShortSerial("0123456789ABCDEF00"), "short serial");
         Equal("0123456789ABCDEF", DeviceSelection.ShortSerial("0123456789ABCDEF"), "short serial keeps 16 chars");
+    }
+
+    private static void ManagedDeviceTests()
+    {
+        // 解析与去重、按数字优先级排序。
+        string text = "b522a8f6|1|2|1;912524510B44|-1|1|2;b522a8f6|0|9|0";
+        IList<ManagedDevice> devices = ManagedDeviceStore.Parse(text);
+        Equal(2, devices.Count, "managed parse dedupe");
+        Equal("912524510B44", devices[0].Serial, "managed priority ascending first");
+        Equal("b522a8f6", devices[1].Serial, "managed priority ascending second");
+        Equal(1, devices[0].Priority, "managed priority value");
+        Equal(2, devices[1].Priority, "managed second priority value");
+        Equal(ManagedDevice.AutoSlot, devices[0].Slot, "managed auto slot");
+        Equal(TrafficCarrier.Telecom, devices[0].Carrier, "managed carrier telecom");
+        Equal(TrafficCarrier.Broadnet, devices[1].Carrier, "managed carrier broadnet");
+
+        // 序列化往返。
+        string serialized = ManagedDeviceStore.Serialize(devices);
+        IList<ManagedDevice> roundTrip = ManagedDeviceStore.Parse(serialized);
+        Equal(2, roundTrip.Count, "managed roundtrip count");
+        Equal(true, roundTrip[0].MeteredOnUsb, "existing device defaults to metered");
+        var manual = new ManagedDevice("manual", 1, 2, TrafficCarrier.None, false);
+        var mixed = ManagedDeviceStore.Parse(ManagedDeviceStore.Serialize(new[] {
+            roundTrip[0], manual.With(manual.Serial, 0, 3, TrafficCarrier.Telecom) }));
+        Equal(true, mixed[0].MeteredOnUsb, "metered preference is per device");
+        Equal(false, mixed[1].MeteredOnUsb, "manual preference survives edit and reload");
+        Equal("serial123", UsbTetherAdapter.PhoneSerial(@"USB\VID_1234&PID_1234\serial123"), "USB phone serial");
+        Equal(null, UsbTetherAdapter.PhoneSerial(@"USB\VID_1234&PID_1234&MI_00\serial123"), "ignore USB function id");
+        Equal(null, UsbTetherAdapter.PhoneSerial(@"PCI\VEN_1234\serial123"), "ignore non-USB serial");
+        Equal("912524510B44|-1|1|2;b522a8f6|1|2|1", serialized, "managed serialized format");
+
+        // 旧配置迁移：优先级顺序即优先级，预设设备排最后，运营商沿用映射。
+        IList<ManagedDevice> migrated = ManagedDeviceStore.Migrate(
+            "b522a8f6;912524510B44", "extraSerial", "b522a8f6|1");
+        Equal(3, migrated.Count, "managed migrate count");
+        Equal("b522a8f6", migrated[0].Serial, "managed migrate priority order");
+        Equal(1, migrated[0].Priority, "managed migrate first priority=1");
+        Equal(TrafficCarrier.Broadnet, migrated[0].Carrier, "managed migrate carrier");
+        Equal(ManagedDevice.AutoSlot, migrated[0].Slot, "managed migrate auto slot");
+        Equal("extraSerial", migrated[2].Serial, "managed migrate target last");
+
+        // 设置文件：无 ManagedDevices 时自动迁移，不丢旧配置。
+        SettingsData legacy = new SettingsData
+        {
+            TargetDeviceSerial = "912524510B44",
+            DevicePriority = "b522a8f6",
+            CarrierByDevice = "912524510B44|2"
+        };
+        SettingsData parsedLegacy = SettingsFile.Parse(SettingsFile.Serialize(legacy));
+        Equal(2, ManagedDeviceStore.Parse(parsedLegacy.ManagedDevices).Count,
+            "settings legacy auto migrated to managed");
+
+        // Normalize：受管设备刷新三个旧字段，自动切换照旧读 DevicePriority。
+        SettingsData normalized = new SettingsData
+        {
+            ManagedDevices = "aaa|0|3|0;bbb|1|1|2"
+        };
+        SettingsFile.Normalize(normalized);
+        Equal("bbb;aaa", normalized.DevicePriority, "normalize derives priority order");
+        Equal("bbb", normalized.TargetDeviceSerial, "normalize derives preferred serial");
     }
 
     private static void SettingsFileTests()

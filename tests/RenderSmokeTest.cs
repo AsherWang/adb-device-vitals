@@ -71,8 +71,10 @@ internal static class RenderSmokeTest
             // 广电详情窗：必须注入带套餐行的数据，覆盖 DataTemplate 的绑定（曾因
             // Run.Text 默认 TwoWay 绑到只读属性抛 XamlParseException，窗口卡死）。
             if (_args.Length > 7) RenderBroadnetDetails(_args[7]);
-            // 设置页「ADB 与设备」：验证新增的流量运营商下拉渲染且不重叠。
+            // 设置页「ADB 与设备」：验证主动添加式设备列表渲染。
             if (_args.Length > 8) RenderSettingsDevices(_args[8]);
+            // 设备编辑弹窗：验证运营商/卡槽/优先级字段渲染。
+            if (_args.Length > 9) RenderDeviceEditor(_args[9]);
             _result = 0;
         }
         catch (Exception ex)
@@ -340,10 +342,50 @@ internal static class RenderSmokeTest
         if (nav == null || item == null)
             throw new InvalidOperationException("Settings device nav not found.");
         nav.Invoke(window, new object[] { item, null });
+
+        // 注入两台在线设备 + 两台已添加设备，覆盖主动添加式主列表的真实布局。
+        var devices = new System.Collections.Generic.List<AdbDevice>
+        {
+            new AdbDevice("b522a8f6", "device", "Redmi K60"),
+            new AdbDevice("912524510B44", "device", "HUAWEI P60")
+        };
+        DeviceSelection.SetActiveSerial("b522a8f6");
+
+        System.Reflection.FieldInfo managedField = typeof(SettingsWindow).GetField("_managed",
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+        var managedList = (System.Collections.Generic.List<ManagedDevice>)managedField.GetValue(window);
+        managedList.Add(new ManagedDevice("b522a8f6", 1, 1, TrafficCarrier.Broadnet));
+        managedList.Add(new ManagedDevice("912524510B44", ManagedDevice.AutoSlot, 2, TrafficCarrier.Telecom));
+
+        System.Reflection.MethodInfo fill = typeof(SettingsWindow).GetMethod("FillDeviceChoices",
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+        if (fill == null) throw new InvalidOperationException("FillDeviceChoices not found.");
+        fill.Invoke(window, new object[] { devices, string.Empty });
+        window.Height = 1040; // 拉高以完整展示目标设备卡片
         window.UpdateLayout();
-        System.Windows.Controls.ComboBox carrier = NamedElement(window, "DeviceCarrierBox") as System.Windows.Controls.ComboBox;
-        if (carrier == null || carrier.Items.Count != 3)
-            throw new InvalidOperationException("Device carrier combo should have 3 choices.");
+
+        System.Windows.Controls.ListBox list = NamedElement(window, "ManagedDeviceListBox") as System.Windows.Controls.ListBox;
+        if (list == null || list.Items.Count != 2)
+            throw new InvalidOperationException("Managed device list should show 2 rows.");
+        Save(window, path);
+    }
+
+    private static void RenderDeviceEditor(string path)
+    {
+        var devices = new System.Collections.Generic.List<AdbDevice>
+        {
+            new AdbDevice("b522a8f6", "device", "Redmi K60"),
+            new AdbDevice("912524510B44", "device", "HUAWEI P60")
+        };
+        // 添加模式：两台都没加入，DeviceBox 应可二选一。
+        DeviceEditorWindow window = Prepare(new DeviceEditorWindow(null, devices,
+            null, new System.Collections.Generic.List<string>(), TrafficCarrier.Broadnet));
+        System.Windows.Controls.ComboBox box = NamedElement(window, "CarrierBox") as System.Windows.Controls.ComboBox;
+        if (box == null || box.Items.Count != 3)
+            throw new InvalidOperationException("Device editor carrier combo should have 3 choices.");
+        var metered = NamedElement(window, "MeteredUsbSwitch") as System.Windows.Controls.Primitives.ToggleButton;
+        if (metered?.IsChecked != true)
+            throw new InvalidOperationException("New devices should enable metered USB sharing by default.");
         Save(window, path);
     }
 

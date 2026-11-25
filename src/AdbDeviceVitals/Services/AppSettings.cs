@@ -1,9 +1,11 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Text;
 using Microsoft.Win32;
+using AdbDeviceVitals.Models;
 
 namespace AdbDeviceVitals.Services
 {
@@ -192,11 +194,69 @@ namespace AdbDeviceVitals.Services
             set { Update(delegate(SettingsData data) { data.TargetDeviceSerial = (value ?? string.Empty).Trim(); }, false, true); }
         }
 
+        /// <summary>
+        /// 设备优先级：serial 列表按分号分隔，靠前的优先。高优先级设备重新连上后自动切过去；
+        /// 低优先级设备在用、且高优先级设备在线时也会切到高优先级那台。
+        /// </summary>
+        public static string DevicePriority
+        {
+            get { lock (Gate) { return _current.DevicePriority ?? string.Empty; } }
+            set { Update(delegate(SettingsData data) { data.DevicePriority = (value ?? string.Empty).Trim(); }, false, true); }
+        }
+
+        /// <summary>解析优先级字符串为去重后的 serial 列表（合法的才保留，顺序不变）。
+        /// 有受管设备时以其数字优先级为准，否则回退旧的顺序列表。</summary>
+        public static IList<string> DevicePriorityList
+        {
+            get
+            {
+                lock (Gate)
+                {
+                    if (!string.IsNullOrWhiteSpace(_current.ManagedDevices))
+                        return ManagedDeviceStore.PrioritySerials(ManagedDeviceStore.Parse(_current.ManagedDevices));
+                }
+                List<string> result = new List<string>();
+                foreach (string part in DevicePriority.Split(';'))
+                {
+                    string serial = (part ?? string.Empty).Trim();
+                    if (!DeviceSelection.IsValidSerial(serial)) continue;
+                    bool duplicate = false;
+                    foreach (string existing in result)
+                        if (string.Equals(existing, serial, StringComparison.OrdinalIgnoreCase)) { duplicate = true; break; }
+                    if (!duplicate) result.Add(serial);
+                }
+                return result;
+            }
+        }
+
         /// <summary>每台手机对应的余量运营商映射（serial|运营商枚举值，分号分隔）。</summary>
         public static string CarrierByDevice
         {
             get { lock (Gate) { return _current.CarrierByDevice ?? string.Empty; } }
             set { Update(delegate(SettingsData data) { data.CarrierByDevice = (value ?? string.Empty).Trim(); }, false, true); }
+        }
+
+        /// <summary>受管设备原始串（serial|slot|priority|carrier;...）。</summary>
+        public static string ManagedDevices
+        {
+            get { lock (Gate) { return _current.ManagedDevices ?? string.Empty; } }
+        }
+
+        /// <summary>解析后的受管设备列表，按优先级升序。</summary>
+        public static IList<Models.ManagedDevice> ManagedDeviceList
+        {
+            get { lock (Gate) { return ManagedDeviceStore.Parse(_current.ManagedDevices ?? string.Empty); } }
+        }
+
+        /// <summary>当前生效设备对应的受管配置；没添加或旧配置时为 null。</summary>
+        public static Models.ManagedDevice CurrentManagedDevice
+        {
+            get
+            {
+                string serial = DeviceSelection.EffectiveSerial;
+                if (serial.Length == 0) return null;
+                return ManagedDeviceStore.Find(ManagedDeviceList, serial);
+            }
         }
 
         /// <summary>当前生效设备指定的运营商；没有映射或自动模式时返回 None。
@@ -255,6 +315,7 @@ namespace AdbDeviceVitals.Services
         /// <summary>调用方已持有 Gate：先写盘成功、再更新缓存，设置页保存后立刻能读到新值。</summary>
         private static void Commit(SettingsData next, bool applyStartup)
         {
+            SettingsFile.Normalize(next);
             WriteFile(next);
             if (applyStartup) ApplyStartupRegistration(next.RunAtStartup);
             _current = next;

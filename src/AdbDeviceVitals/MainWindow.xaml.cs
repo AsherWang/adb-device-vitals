@@ -246,7 +246,7 @@ namespace AdbDeviceVitals
             _tray.ContextMenuStrip = menu;
         }
 
-        private void RequestExit()
+        internal void RequestExit()
         {
             _allowExit = true;
             Application.Current.Shutdown();
@@ -337,7 +337,11 @@ namespace AdbDeviceVitals
             string to = DeviceSelection.ShortSerial(snapshot.DeviceSerial);
             _trafficService.Trace("device switch " + from + " -> " + to
                 + (snapshot.SwitchedBackToPreferred ? " (back to preferred)" : " (failover)"));
-            Notify(snapshot.SwitchedBackToPreferred ? "已切回预设设备" : "已自动切换设备",
+            bool byPriority = AppSettings.DevicePriorityList.Count > 0;
+            string title = snapshot.SwitchedBackToPreferred
+                ? (byPriority ? "已切到高优先级设备" : "已切回预设设备")
+                : "已自动切换设备";
+            Notify(title,
                 from + " → " + to + (AppSettings.AutoEnableUsbTethering
                     ? "，正在重新开启 USB 网络共享。" : "。"),
                 WF.ToolTipIcon.Info);
@@ -357,7 +361,10 @@ namespace AdbDeviceVitals
 
             _autoDetectedSerial = serial;
             _carrierDetector.Invalidate(serial);
-            _autoDetectedCarrier = await _carrierDetector.DetectAsync(serial).ConfigureAwait(true);
+            // 设置页配置了卡槽时按该槽识别；否则自动探测活跃数据卡。
+            ManagedDevice managed = AppSettings.CurrentManagedDevice;
+            int slot = managed == null ? -1 : managed.Slot;
+            _autoDetectedCarrier = await _carrierDetector.DetectAsync(serial, slot).ConfigureAwait(true);
         }
 
         private async Task RefreshSnapshot(bool force)
@@ -1151,7 +1158,7 @@ namespace AdbDeviceVitals
                 return;
             }
             _broadnetTrafficWindow = new BroadnetTrafficWindow(
-                delegate(TrafficCarrier c) { _ = RefreshCarrierFromWindowAsync(c); });
+                delegate(TrafficCarrier c) { _ = RefreshCarrierFromWindowAsync(c); }, _carrierDetector);
             _broadnetTrafficWindow.SetCarriers(
                 CarrierMapping.DisplayName(TrafficCarrier.Broadnet),
                 CarrierMapping.DisplayName(TrafficCarrier.Telecom));

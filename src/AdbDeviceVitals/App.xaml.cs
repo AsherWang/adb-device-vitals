@@ -19,8 +19,10 @@ namespace AdbDeviceVitals
 
         private Mutex _mutex;
         private EventWaitHandle _activationEvent;
+        private EventWaitHandle _exitEvent;
         private DispatcherTimer _activationTimer;
         private MainWindow _mainWindow;
+        internal UsbMeteredConnections UsbMetering { get; private set; }
 
         protected override void OnStartup(StartupEventArgs e)
         {
@@ -38,7 +40,10 @@ namespace AdbDeviceVitals
             }
 
             // 只读一次配置文件；后续轮询命中内存缓存，不会每 2.5 秒碰一次磁盘。
+            _exitEvent = new EventWaitHandle(false, EventResetMode.AutoReset,
+                @"Local\AdbDeviceVitals.Exit." + Environment.ProcessId);
             AppSettings.Initialize();
+            UsbMetering = new UsbMeteredConnections();
             // Toast 的 AppUserModelID 必须在建窗口之前设置。
             WindowsToastService.PrepareAppId();
             // 原生 WinForms 对话框（ADB 目录选择）跟随系统视觉样式。
@@ -53,6 +58,7 @@ namespace AdbDeviceVitals
             _activationTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(250) };
             _activationTimer.Tick += delegate
             {
+                if (_exitEvent.WaitOne(0)) { _mainWindow.RequestExit(); return; }
                 if (_activationEvent != null && _activationEvent.WaitOne(0)) _mainWindow.RestoreWindow();
             };
             _activationTimer.Start();
@@ -88,7 +94,9 @@ namespace AdbDeviceVitals
         {
             if (_activationTimer != null) _activationTimer.Stop();
             if (_mainWindow != null) _mainWindow.Shutdown();
+            UsbMetering?.Dispose();
             if (_activationEvent != null) _activationEvent.Dispose();
+            if (_exitEvent != null) _exitEvent.Dispose();
             if (_mutex != null)
             {
                 try { _mutex.ReleaseMutex(); } catch { }

@@ -52,8 +52,8 @@ namespace AdbDeviceVitals.Services
             }
 
             IList<AdbDevice> devices = await _adb.ListDevicesAsync().ConfigureAwait(false);
-            DeviceSelection selection = DeviceSelection.ResolveWithFailover(devices,
-                AppSettings.TargetDeviceSerial, DeviceSelection.ActiveSerial);
+            DeviceSelection selection = DeviceSelection.ResolveWithPriority(devices,
+                AppSettings.DevicePriorityList, AppSettings.TargetDeviceSerial, DeviceSelection.ActiveSerial);
             snapshot.AutoSwitchedToFallback = selection.JustSwitched;
             snapshot.SwitchedBackToPreferred = selection.SwitchBack;
             snapshot.SwitchFromSerial = selection.PreviousSerial;
@@ -147,9 +147,21 @@ namespace AdbDeviceVitals.Services
                 int? subId = AdbParsers.ParseActiveDataSubId(telephony.Output);
                 int? phoneId = AdbParsers.ParseActiveDataPhoneId(telephony.Output, subId);
                 target.ActiveDataSubId = subId;
-                target.SignalPhoneId = phoneId;
-                // 有数据卡映射就只读它的信号块；映射不到时走旧的首块行为。
-                AdbParsers.ParseTelephony(telephony.Output, target, phoneId);
+
+                // 设置页配置了卡槽时按该卡读取（slot 即 phoneId）；否则用自动探测的数据卡。
+                Models.ManagedDevice managed = Models.ManagedDeviceStore.Find(
+                    AppSettings.ManagedDeviceList, serial);
+                if (managed != null && !managed.IsAutoSlot)
+                {
+                    target.SignalPhoneId = managed.Slot;
+                    AdbParsers.ParseTelephony(telephony.Output, target, managed.Slot);
+                }
+                else
+                {
+                    target.SignalPhoneId = phoneId;
+                    // 有数据卡映射就只读它的信号块；映射不到时走旧的首块行为。
+                    AdbParsers.ParseTelephony(telephony.Output, target, phoneId);
+                }
             }
             // 诊断：区分「采集失败沿用旧值」和「读到新值」；正常运行时可关掉。
             new TetherLog().Write("signal poll serial=" + serial

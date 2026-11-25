@@ -163,6 +163,76 @@ namespace AdbDeviceVitals.Services
             return strict;
         }
 
+        /// <summary>
+        /// 带设备优先级的解析：优先级列表里排在最前且当前在线的设备总是生效目标。
+        /// 低优先级设备在用、更高优先级设备重新连上时会立刻切过去（SwitchBack 标记），
+        /// 由调用方提示一次并重走 USB 共享。优先级列表里一个都不在线时，沿用故障转移
+        /// 的兜底：当前接管设备仍在就保持，否则唯一一台已授权设备临时接管。
+        /// 没有配置优先级时行为与 ResolveWithFailover 完全一致。
+        /// </summary>
+        public static DeviceSelection ResolveWithPriority(IList<AdbDevice> devices,
+            IList<string> prioritySerials, string preferredSerial, string activeSerial)
+        {
+            List<string> priority = new List<string>();
+            if (prioritySerials != null)
+            {
+                foreach (string serial in prioritySerials)
+                {
+                    string value = IsValidSerial(serial) ? serial.Trim() : string.Empty;
+                    if (value.Length == 0) continue;
+                    bool duplicate = false;
+                    foreach (string existing in priority)
+                        if (Same(existing, value)) { duplicate = true; break; }
+                    if (!duplicate) priority.Add(value);
+                }
+            }
+
+            string active = IsValidSerial(activeSerial) ? activeSerial.Trim() : string.Empty;
+            string preferred = (preferredSerial ?? string.Empty).Trim();
+            // 没有优先级配置时完全沿用旧的「预设设备 + 故障转移」行为，兼容现有用户。
+            if (priority.Count == 0)
+                return ResolveWithFailover(devices, preferred, active);
+
+            DeviceSelection fallback = ResolveWithFailover(devices, preferred, active);
+
+            // 按优先级顺序找当前在线的最高优先级设备。
+            AdbDevice target = null;
+            foreach (string serial in priority)
+            {
+                AdbDevice found = Find(devices, serial);
+                if (found == null) continue;
+                target = found;
+                break;
+            }
+
+            // 优先级列表里一个都不在线：交给故障转移的既有兜底，不改它的语义。
+            if (target == null) return fallback;
+
+            // 最高优先级设备就是当前设备：没有切换。即使 fallback 因为 active/首选
+            // 短暂不一致而给了 SwitchBack，也不该重复提示。
+            if (Same(active, target.Serial))
+                return new DeviceSelection(target, string.Empty, false, false, preferred,
+                    fallback.AuthorizedCount, fallback.UnauthorizedCount);
+
+            // 当前用的不是最高优先级：按优先级变化方向区分提示语义。
+            // 目标比当前靠前 = 高优先级重新上线，SwitchBack（切回高优先级）；
+            // 目标比当前靠后 = 高优先级掉线后降级，JustSwitched（临时接管）。
+            int activeRank = RankOf(priority, active);
+            int targetRank = RankOf(priority, target.Serial);
+            bool movingUp = activeRank < 0 || (targetRank >= 0 && targetRank < activeRank);
+            return new DeviceSelection(target, string.Empty, false, false, preferred,
+                fallback.AuthorizedCount, fallback.UnauthorizedCount, active, !movingUp, movingUp);
+        }
+
+        /// <summary>serial 在优先级列表里的下标，不在列表返回 -1。</summary>
+        private static int RankOf(IList<string> priority, string serial)
+        {
+            if (string.IsNullOrEmpty(serial)) return -1;
+            for (int i = 0; i < priority.Count; i++)
+                if (Same(priority[i], serial)) return i;
+            return -1;
+        }
+
         private static AdbDevice Find(IList<AdbDevice> devices, string serial)
         {
             if (devices == null) return null;

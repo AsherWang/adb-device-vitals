@@ -1,7 +1,9 @@
 using System;
+using System.Collections.Generic;
 using System.Globalization;
 using System.Text;
 using System.Text.RegularExpressions;
+using AdbDeviceVitals.Models;
 
 namespace AdbDeviceVitals.Services
 {
@@ -13,7 +15,9 @@ namespace AdbDeviceVitals.Services
             Schema = 1;
             AdbDirectory = string.Empty;
             TargetDeviceSerial = string.Empty;
+            DevicePriority = string.Empty;
             CarrierByDevice = string.Empty;
+            ManagedDevices = string.Empty;
             SmsSenderFilter = string.Empty;
             // 读短信属于需要显式授权的能力：默认关闭，旧配置文件缺这个字段也按关闭处理。
             SmsSyncEnabled = false;
@@ -24,7 +28,11 @@ namespace AdbDeviceVitals.Services
         public int Schema;
         public string AdbDirectory;
         public string TargetDeviceSerial;
+        /// <summary>设备优先级，serial 列表按分号分隔，靠前的优先。高优先级设备上线时自动切过去。</summary>
+        public string DevicePriority;
         public string CarrierByDevice;
+        /// <summary>受管设备：serial|slot|priority|carrier;... 每条一台，含卡槽与数字优先级。</summary>
+        public string ManagedDevices;
         public bool RunAtStartup;
         public bool AutoEnableUsbTethering;
         public bool AutoStartPcHotspot;
@@ -41,7 +49,9 @@ namespace AdbDeviceVitals.Services
                 Schema = Schema,
                 AdbDirectory = AdbDirectory,
                 TargetDeviceSerial = TargetDeviceSerial,
+                DevicePriority = DevicePriority ?? string.Empty,
                 CarrierByDevice = CarrierByDevice ?? string.Empty,
+                ManagedDevices = ManagedDevices ?? string.Empty,
                 RunAtStartup = RunAtStartup,
                 AutoEnableUsbTethering = AutoEnableUsbTethering,
                 AutoStartPcHotspot = AutoStartPcHotspot,
@@ -90,18 +100,43 @@ namespace AdbDeviceVitals.Services
             foreach (Match match in StringPair.Matches(text))
                 ApplyString(data, match.Groups["key"].Value, Unescape(match.Groups["value"].Value));
 
+            // 旧配置没有 ManagedDevices：用优先级/预设设备/运营商映射还原一次，避免用户重配。
+            if (string.IsNullOrWhiteSpace(data.ManagedDevices))
+            {
+                IList<ManagedDevice> migrated = ManagedDeviceStore.Migrate(
+                    data.DevicePriority, data.TargetDeviceSerial, data.CarrierByDevice);
+                if (migrated.Count > 0) data.ManagedDevices = ManagedDeviceStore.Serialize(migrated);
+            }
+
             return data;
+        }
+
+        /// <summary>ManagedDevices 是唯一真值：由它刷新三个旧字段，保证自动切换/运营商读取跟设置页一致。</summary>
+        public static void Normalize(SettingsData data)
+        {
+            if (data == null || string.IsNullOrWhiteSpace(data.ManagedDevices)) return;
+            IList<ManagedDevice> managed = ManagedDeviceStore.Parse(data.ManagedDevices);
+            IList<string> serials = ManagedDeviceStore.PrioritySerials(managed);
+            data.DevicePriority = string.Join(";", new List<string>(serials).ToArray());
+            data.TargetDeviceSerial = serials.Count > 0 ? serials[0] : string.Empty;
+            Dictionary<string, TrafficCarrier> carriers = new Dictionary<string, TrafficCarrier>(StringComparer.OrdinalIgnoreCase);
+            foreach (ManagedDevice device in managed)
+                carriers[device.Serial] = device.Carrier;
+            data.CarrierByDevice = CarrierMapping.Serialize(carriers);
         }
 
         public static string Serialize(SettingsData value)
         {
             SettingsData data = value ?? new SettingsData();
+            Normalize(data);
             StringBuilder text = new StringBuilder();
             text.AppendLine("{");
             text.AppendLine("  \"schema\": " + (data.Schema > 0 ? data.Schema : 1).ToString(CultureInfo.InvariantCulture) + ",");
             text.AppendLine("  \"AdbDirectory\": \"" + Escape(data.AdbDirectory) + "\",");
             text.AppendLine("  \"TargetDeviceSerial\": \"" + Escape(data.TargetDeviceSerial) + "\",");
+            text.AppendLine("  \"DevicePriority\": \"" + Escape(data.DevicePriority) + "\",");
             text.AppendLine("  \"CarrierByDevice\": \"" + Escape(data.CarrierByDevice) + "\",");
+            text.AppendLine("  \"ManagedDevices\": \"" + Escape(data.ManagedDevices) + "\",");
             text.AppendLine("  \"RunAtStartup\": " + BooleanText(data.RunAtStartup) + ",");
             text.AppendLine("  \"AutoEnableUsbTethering\": " + BooleanText(data.AutoEnableUsbTethering) + ",");
             text.AppendLine("  \"AutoStartPcHotspot\": " + BooleanText(data.AutoStartPcHotspot) + ",");
@@ -136,9 +171,17 @@ namespace AdbDeviceVitals.Services
             {
                 data.TargetDeviceSerial = (value ?? string.Empty).Trim();
             }
+            else if (string.Equals(key, "DevicePriority", StringComparison.OrdinalIgnoreCase))
+            {
+                data.DevicePriority = (value ?? string.Empty).Trim();
+            }
             else if (string.Equals(key, "CarrierByDevice", StringComparison.OrdinalIgnoreCase))
             {
                 data.CarrierByDevice = (value ?? string.Empty).Trim();
+            }
+            else if (string.Equals(key, "ManagedDevices", StringComparison.OrdinalIgnoreCase))
+            {
+                data.ManagedDevices = (value ?? string.Empty).Trim();
             }
             else if (string.Equals(key, "SmsSenderFilter", StringComparison.OrdinalIgnoreCase))
             {
