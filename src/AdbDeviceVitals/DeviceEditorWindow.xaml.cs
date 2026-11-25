@@ -39,6 +39,7 @@ namespace AdbDeviceVitals
             _existing = existing;
             bool editing = existing != null;
             MeteredUsbSwitch.IsChecked = existing?.MeteredOnUsb ?? true;
+            AutoScreenOffSwitch.IsChecked = existing?.AutoScreenOff ?? false;
 
             WindowTitle.Title = editing ? "编辑设备" : "添加设备";
             Title = editing ? "编辑设备" : "添加设备";
@@ -157,7 +158,8 @@ namespace AdbDeviceVitals
             if (slotItem != null && int.TryParse(Convert.ToString(slotItem.Tag), out parsedSlot)) slot = parsedSlot;
             TrafficCarrier carrier = (TrafficCarrier)Math.Max(0, Math.Min(2, CarrierBox.SelectedIndex));
 
-            Result = new ManagedDevice(serial, slot, priority, carrier, MeteredUsbSwitch.IsChecked == true);
+            Result = new ManagedDevice(serial, slot, priority, carrier, MeteredUsbSwitch.IsChecked == true,
+                AutoScreenOffSwitch.IsChecked == true);
             DialogResult = true;
             Close();
         }

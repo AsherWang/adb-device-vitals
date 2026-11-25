@@ -72,6 +72,7 @@ namespace AdbDeviceVitals
         private bool _smsPollRunning;
         private bool _smsErrorNotified;
         private bool _backgroundStarted;
+        private AutoScreenOffService _autoScreenOff;
         private bool _shutdownDone;
         private bool _polling;
         private bool _allowExit;
@@ -197,6 +198,7 @@ namespace AdbDeviceVitals
         {
             if (_backgroundStarted) return;
             _backgroundStarted = true;
+            _autoScreenOff = new AutoScreenOffService(_adb);
             CreateTray();
 
             string configError = AppSettings.LastError;
@@ -265,6 +267,7 @@ namespace AdbDeviceVitals
         {
             if (_shutdownDone) return;
             _shutdownDone = true;
+            _autoScreenOff?.Dispose();
             _timer.Stop();
             _publicIpTimer.Stop();
             _publicIpDebounce.Stop();

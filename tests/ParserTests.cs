@@ -22,6 +22,7 @@ internal static class ParserTests
         DeviceSelectionTests();
         SettingsFileTests();
         ManagedDeviceTests();
+        AutoScreenOffTests();
         SmsParserTests();
         SmsEnhancements();
         UsbTetherWatchdogTests();
@@ -32,6 +33,24 @@ internal static class ParserTests
         TelecomTrafficTests();
         Console.WriteLine(_failed == 0 ? "All parser tests passed." : _failed + " parser test(s) failed.");
         return _failed == 0 ? 0 : 1;
+    }
+
+    private static void AutoScreenOffTests()
+    {
+        const string sample = "mWakefulness=Awake\n  mLastWakeTime=1200 (800000 ms ago)\n"
+            + "  displayGroupId=0\n  lastUserActivityTime=501200 (300000 ms ago)\n"
+            + "  lastUserActivityTimeNoChangeLights=0 (801200 ms ago)\n";
+        Equal(true, AutoScreenOffService.ShouldSleep(sample), "five minutes idle");
+        Equal(false, AutoScreenOffService.ShouldSleep(sample.Replace("300000", "299999")), "recent touch");
+        Equal(false, AutoScreenOffService.ShouldSleep(sample.Replace("801200 ms ago", "100 ms ago")), "no-change-lights interaction");
+        Equal(false, AutoScreenOffService.ShouldSleep(sample.Replace("800000 ms ago", "400 ms ago")), "just woken");
+        Equal(false, AutoScreenOffService.ShouldSleep(sample.Replace("Awake", "Dozing")), "already asleep");
+        Equal(false, AutoScreenOffService.ShouldSleep(sample.Replace("300000 ms ago", "now")), "activity now");
+        Equal(false, AutoScreenOffService.ShouldSleep(sample.Replace("lastUserActivityTime=", "unknown=")), "missing activity");
+        Equal(false, AutoScreenOffService.ShouldSleep(sample + "mWakefulnessChanging=true\n"), "wake transition");
+        Equal(false, AutoScreenOffService.ShouldSleep(sample + "lastUserActivityTime=1 (15 ms ago)\n"), "other display in use");
+        Equal(false, AutoScreenOffService.ShouldSleep("Permission Denial"), "unsupported device");
+        Equal(true, AutoScreenOffService.ShouldSleep(sample.Replace("lastUser", "mLastUser").Replace("\n", "\r\n")), "legacy fields");
     }
 
     private static void Battery()
@@ -279,6 +298,16 @@ internal static class ParserTests
         IList<ManagedDevice> roundTrip = ManagedDeviceStore.Parse(serialized);
         Equal(2, roundTrip.Count, "managed roundtrip count");
         Equal(true, roundTrip[0].MeteredOnUsb, "existing device defaults to metered");
+        Equal(false, roundTrip[0].AutoScreenOff, "existing device defaults to no automatic sleep");
+        foreach (bool metered in new[] { false, true })
+        {
+            var device = new ManagedDevice("optedIn", 1, 1, TrafficCarrier.Telecom, metered, true);
+            var saved = ManagedDeviceStore.Parse(ManagedDeviceStore.Serialize(new[] {
+                device.With(device.Serial, 0, 2, TrafficCarrier.Broadnet) }))[0];
+            Equal(true, saved.AutoScreenOff, "auto screen off survives save and edit");
+            Equal(metered, saved.MeteredOnUsb, "auto screen off independent of metering");
+        }
+        Equal(false, ManagedDeviceStore.Parse("legacy|-1|1|0|0")[0].AutoScreenOff, "legacy manual metering");
         var manual = new ManagedDevice("manual", 1, 2, TrafficCarrier.None, false);
         var mixed = ManagedDeviceStore.Parse(ManagedDeviceStore.Serialize(new[] {
             roundTrip[0], manual.With(manual.Serial, 0, 3, TrafficCarrier.Telecom) }));

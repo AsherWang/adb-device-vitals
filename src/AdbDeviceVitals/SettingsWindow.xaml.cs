@@ -17,7 +17,6 @@ namespace AdbDeviceVitals
     /// </summary>
     public partial class SettingsWindow
     {
-        private static readonly Brush Muted = MakeBrush(0x6E, 0x6E, 0x6E);
         private static readonly Brush Warning = MakeBrush(0xB0, 0x48, 0x1C);
 
         private readonly AdbClient _adb;
@@ -29,19 +28,17 @@ namespace AdbDeviceVitals
         private readonly List<ManagedDevice> _managed = new List<ManagedDevice>();
         private IList<AdbDevice> _onlineDevices = new List<AdbDevice>();
         private bool _loadingDevices;
-        private int _authorizedCount;
-        private int _unauthorizedCount;
+        private bool _adbDirectoryEdited;
 
         /// <summary>主列表的一行：标题、详情、状态。</summary>
         private sealed class ManagedDeviceRow
         {
-            public ManagedDeviceRow(ManagedDevice device, string title, string detail, string status)
+            public ManagedDeviceRow(ManagedDevice device, string title, string status)
             {
-                Device = device; Title = title; Detail = detail; Status = status;
+                Device = device; Title = title; Status = status;
             }
             public ManagedDevice Device { get; private set; }
             public string Title { get; private set; }
-            public string Detail { get; private set; }
             public string Status { get; private set; }
         }
 
@@ -53,9 +50,9 @@ namespace AdbDeviceVitals
             _checkForUpdates = checkForUpdates;
 
             AdbDirectoryBox.Text = AppSettings.AdbDirectory;
-            CurrentAdbText.Text = string.IsNullOrEmpty(adb == null ? string.Empty : adb.AdbPath)
-                ? "当前未检测到 ADB"
-                : "当前使用：" + adb.AdbPath;
+            if (string.IsNullOrEmpty(AdbDirectoryBox.Text) && !string.IsNullOrEmpty(adb?.AdbPath))
+                AdbDirectoryBox.Text = Path.GetDirectoryName(adb.AdbPath);
+            AdbDirectoryBox.TextChanged += delegate { _adbDirectoryEdited = true; };
             RunAtStartupSwitch.IsChecked = AppSettings.RunAtStartup;
             AutoEnableUsbTetheringSwitch.IsChecked = AppSettings.AutoEnableUsbTethering;
             AutoRecoverUsbTetheringSwitch.IsChecked = AppSettings.AutoRecoverUsbTethering;
@@ -141,15 +138,12 @@ namespace AdbDeviceVitals
         private void FillDeviceChoices(IList<AdbDevice> devices, string error)
         {
             _onlineDevices = devices ?? new List<AdbDevice>();
-            _authorizedCount = 0;
-            _unauthorizedCount = 0;
-            foreach (AdbDevice device in devices)
-            {
-                if (DeviceSelection.IsAuthorized(device)) _authorizedCount++;
-                else _unauthorizedCount++;
-            }
-            DeviceStatusText.Tag = error;
-            UpdateDeviceStatus();
+            int unauthorized = 0;
+            foreach (var device in _onlineDevices)
+                if (!DeviceSelection.IsAuthorized(device)) unauthorized++;
+            DeviceStatusText.Text = !string.IsNullOrEmpty(error) ? "读取设备列表失败：" + error
+                : unauthorized > 0 ? unauthorized + " 台设备未授权" : string.Empty;
+            DeviceStatusText.Foreground = Warning;
             RefreshManagedList();
         }
 
@@ -172,21 +166,16 @@ namespace AdbDeviceVitals
                 string name = string.IsNullOrEmpty(model) ? "Android 设备" : model;
                 string title = "P" + device.Priority.ToString(System.Globalization.CultureInfo.InvariantCulture)
                     + " · " + name + "（" + DeviceSelection.ShortSerial(device.Serial) + "）";
-                string carrier = device.Carrier == TrafficCarrier.None
-                    ? "运营商自动" : CarrierMapping.DisplayName(device.Carrier);
-                string detail = "优先级 " + device.Priority + " · " + carrier + " · " + device.SlotText;
-                detail += device.MeteredOnUsb ? " · 共享时自动按流量计费" : " · 手动管理计费";
-
                 bool isOnline = false;
                 foreach (AdbDevice item in _onlineDevices)
                     if (DeviceSelection.IsAuthorized(item)
                         && string.Equals(item.Serial, device.Serial, StringComparison.OrdinalIgnoreCase)) { isOnline = true; break; }
-                string status = !isOnline ? "未连接"
-                    : string.Equals(active, device.Serial, StringComparison.OrdinalIgnoreCase) ? "● 当前使用" : "在线";
-
+                bool isActive = isOnline && string.Equals(active, device.Serial, StringComparison.OrdinalIgnoreCase);
+                if (isActive) title = "✓ " + title;
+                string status = isOnline ? "在线" : "未连接";
                 if (device.MeteredOnUsb && (Application.Current as App)?.UsbMetering is UsbMeteredConnections metering)
                     status += " · " + metering.Status(device.Serial);
-                ManagedDeviceRow row = new ManagedDeviceRow(device, title, detail, status);
+                ManagedDeviceRow row = new ManagedDeviceRow(device, title, status);
                 ManagedDeviceListBox.Items.Add(row);
                 if (selected is ManagedDeviceRow
                     && string.Equals(((ManagedDeviceRow)selected).Device.Serial, device.Serial, StringComparison.OrdinalIgnoreCase))
@@ -248,31 +237,6 @@ namespace AdbDeviceVitals
             RefreshManagedList();
         }
 
-        /// <summary>顶部状态摘要：当前生效设备 + 降级/失败提示，只显示一次。</summary>
-        private void UpdateDeviceStatus()
-        {
-            string error = DeviceStatusText.Tag as string;
-            string active = DeviceSelection.EffectiveSerial;
-            string activeLabel = string.IsNullOrEmpty(active) ? "—" : DeviceSelection.ShortSerial(active);
-
-            if (!string.IsNullOrEmpty(error))
-            {
-                DeviceStatusText.Foreground = Warning;
-                DeviceStatusText.Text = "读取设备列表失败：" + error;
-                return;
-            }
-            if (_managed.Count == 0)
-            {
-                DeviceStatusText.Foreground = Muted;
-                DeviceStatusText.Text = "未添加设备";
-                return;
-            }
-            DeviceStatusText.Foreground = active.Length > 0 ? Muted : Warning;
-            DeviceStatusText.Text = active.Length > 0 ? "当前使用 " + activeLabel : "等待已添加的设备连接…";
-            if (_unauthorizedCount > 0)
-                DeviceStatusText.Text += " · " + _unauthorizedCount + " 台未授权";
-        }
-
         private async void CheckUpdatesButton_Click(object sender, RoutedEventArgs e)
         {
             if (_checkForUpdates == null) return;
@@ -321,6 +285,7 @@ namespace AdbDeviceVitals
         private void SaveButton_Click(object sender, RoutedEventArgs e)
         {
             string directory = (AdbDirectoryBox.Text ?? string.Empty).Trim().Trim('"');
+            if (!_adbDirectoryEdited) directory = AppSettings.AdbDirectory;
             if (directory.Length > 0 && !File.Exists(Path.Combine(directory, "adb.exe")))
             {
                 MessageBox.Show(this, "所选目录中没有找到 adb.exe。", "ADB 目录无效", MessageBoxButton.OK, MessageBoxImage.Warning);

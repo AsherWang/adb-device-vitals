@@ -114,22 +114,18 @@
 
                     <StackPanel x:Name="Page1" Visibility="Collapsed">
                         <TextBlock Text="ADB 与设备" FontSize="26" FontWeight="SemiBold" />
-                        <TextBlock Text="指定 adb.exe 位置，以及多设备时的目标手机" FontSize="12" Opacity="0.65" Margin="0,4,0,20" />
 
-                        <TextBlock Text="ADB 目录" FontSize="15" FontWeight="SemiBold" Margin="0,0,0,10" />
+                        <TextBlock Text="ADB 目录" FontSize="15" FontWeight="SemiBold" Margin="0,20,0,10" />
                         <ui:Card Margin="0,0,0,20">
                             <StackPanel Margin="16,14">
-                                <TextBlock Text="包含 adb.exe 的 platform-tools 目录。留空时从程序目录、Android SDK 和 PATH 自动查找。"
-                                           FontSize="12" Opacity="0.62" TextWrapping="Wrap" />
-                                <Grid Margin="0,12,0,0">
+                                <Grid>
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="*" />
                                         <ColumnDefinition Width="Auto" />
                                     </Grid.ColumnDefinitions>
-                                    <TextBox Grid.Column="0" x:Name="AdbDirectoryBox" VerticalContentAlignment="Center" />
+                                    <ui:TextBox Grid.Column="0" x:Name="AdbDirectoryBox" PlaceholderText="留空时从程序目录、Android SDK 和 PATH 自动查找" VerticalContentAlignment="Center" />
                                     <Button Grid.Column="1" x:Name="BrowseButton" Content="浏览…" Padding="14,6" Margin="8,0,0,0" Click="BrowseButton_Click" />
                                 </Grid>
-                                <TextBlock x:Name="CurrentAdbText" Text="" FontSize="12" Opacity="0.62" Margin="0,8,0,0" TextTrimming="CharacterEllipsis" />
                             </StackPanel>
                         </ui:Card>
 
@@ -150,10 +146,7 @@
                                                Padding="14,5" Margin="8,0,0,0" Click="AddDeviceButton_Click" />
                                 </Grid>
 
-                                <TextBlock Text="已添加的设备" FontSize="13" FontWeight="SemiBold" Margin="0,18,0,0" />
-                                <TextBlock Text="优先级数字越小越靠前；当前设备掉线时自动切到下一台，高优先级重连后自动切回。"
-                                           FontSize="12" Opacity="0.62" Margin="0,4,0,8" TextWrapping="Wrap" />
-                                <ListBox x:Name="ManagedDeviceListBox" MinHeight="96" MaxHeight="240"
+                                <ListBox x:Name="ManagedDeviceListBox" Margin="0,12,0,0" MinHeight="96" MaxHeight="240"
                                          SelectionMode="Single" ScrollViewer.VerticalScrollBarVisibility="Auto">
                                     <ListBox.ItemTemplate>
                                         <DataTemplate>
@@ -164,7 +157,6 @@
                                                 </Grid.ColumnDefinitions>
                                                 <StackPanel Grid.Column="0" VerticalAlignment="Center">
                                                     <TextBlock Text="{Binding Title}" FontSize="13" FontWeight="SemiBold" />
-                                                    <TextBlock Text="{Binding Detail}" FontSize="12" Opacity="0.66" Margin="0,2,0,0" />
                                                     <TextBlock Text="{Binding Status}" FontSize="12" Margin="0,2,0,0" TextWrapping="Wrap" />
                                                 </StackPanel>
                                                 <Button Grid.Column="1" Content="⚙ 设置" Padding="10,5"

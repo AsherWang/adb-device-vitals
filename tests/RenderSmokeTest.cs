@@ -386,6 +386,9 @@ internal static class RenderSmokeTest
         var metered = NamedElement(window, "MeteredUsbSwitch") as System.Windows.Controls.Primitives.ToggleButton;
         if (metered?.IsChecked != true)
             throw new InvalidOperationException("New devices should enable metered USB sharing by default.");
+        var autoScreenOff = NamedElement(window, "AutoScreenOffSwitch") as System.Windows.Controls.Primitives.ToggleButton;
+        if (autoScreenOff?.IsChecked != false)
+            throw new InvalidOperationException("New devices should default to automatic screen off disabled.");
         Save(window, path);
     }
 

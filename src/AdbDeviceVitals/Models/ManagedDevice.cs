@@ -15,13 +15,14 @@ namespace AdbDeviceVitals.Models
     {
         public const int AutoSlot = -1;
 
-        public ManagedDevice(string serial, int slot, int priority, TrafficCarrier carrier, bool meteredOnUsb = true)
+        public ManagedDevice(string serial, int slot, int priority, TrafficCarrier carrier, bool meteredOnUsb = true, bool autoScreenOff = false)
         {
             Serial = serial ?? string.Empty;
             Slot = slot < 0 ? AutoSlot : slot;
             Priority = priority < 1 ? 1 : priority;
             Carrier = carrier;
             MeteredOnUsb = meteredOnUsb;
+            AutoScreenOff = autoScreenOff;
         }
 
         public string Serial { get; private set; }
@@ -29,6 +30,7 @@ namespace AdbDeviceVitals.Models
         public int Priority { get; private set; }
         public TrafficCarrier Carrier { get; private set; }
         public bool MeteredOnUsb { get; private set; }
+        public bool AutoScreenOff { get; private set; }
 
         public bool IsAutoSlot { get { return Slot == AutoSlot; } }
 
@@ -36,13 +38,13 @@ namespace AdbDeviceVitals.Models
 
         public ManagedDevice With(string serial, int slot, int priority, TrafficCarrier carrier)
         {
-            return new ManagedDevice(serial, slot, priority, carrier, MeteredOnUsb);
+            return new ManagedDevice(serial, slot, priority, carrier, MeteredOnUsb, AutoScreenOff);
         }
     }
 
     /// <summary>
     /// 受管设备列表的编解码与旧配置迁移。
-    /// 存储格式：serial|slot|priority|carrier;serial|slot|priority|carrier
+    /// 每条记录格式：serial|slot|priority|carrier[|meteredOnUsb[|autoScreenOff]]
     /// 旧版本没有这个字段，用 DevicePriority（顺序）+ TargetDeviceSerial + CarrierByDevice 还原。
     /// </summary>
     public static class ManagedDeviceStore
@@ -80,7 +82,8 @@ namespace AdbDeviceVitals.Models
                     if (string.Equals(existing.Serial, serial, StringComparison.OrdinalIgnoreCase)) { duplicate = true; break; }
                 if (duplicate) continue;
 
-                result.Add(new ManagedDevice(serial, slot, priority, carrier, fields.Length < 5 || fields[4].Trim() != "0"));
+                result.Add(new ManagedDevice(serial, slot, priority, carrier, fields.Length < 5 || fields[4].Trim() != "0",
+                    fields.Length >= 6 && fields[5].Trim() == "1"));
                 fallbackPriority = Math.Max(fallbackPriority, priority);
             }
             Sort(result);
@@ -105,7 +108,8 @@ namespace AdbDeviceVitals.Models
                     .Append(device.Slot.ToString(CultureInfo.InvariantCulture)).Append('|')
                     .Append(device.Priority.ToString(CultureInfo.InvariantCulture)).Append('|')
                     .Append(((int)device.Carrier).ToString(CultureInfo.InvariantCulture));
-                if (!device.MeteredOnUsb) text.Append("|0");
+                if (!device.MeteredOnUsb || device.AutoScreenOff) text.Append(device.MeteredOnUsb ? "|1" : "|0");
+                if (device.AutoScreenOff) text.Append("|1");
             }
             return text.ToString();
         }
